@@ -1,0 +1,11 @@
+# ── Golf Ball Dataset Configuration ─────────────────────────────────────────
+# Update the paths below to point to your actual image / label directories.
+
+path: ../data            # dataset root dir (relative to this yaml)
+train: images/train      # train images
+val:   images/val        # validation images
+
+nc: 2                    # number of classes
+names:
+  0: golf_ball
+  1: putter
