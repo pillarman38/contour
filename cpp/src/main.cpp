@@ -14,6 +14,7 @@
 #include "tracker.h"
 #include "unreal_sender.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <iostream>

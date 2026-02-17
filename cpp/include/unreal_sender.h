@@ -14,6 +14,9 @@
 
 #include "tracker.h"
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+
 #include <cstdint>
 #include <string>
 
@@ -40,7 +43,7 @@ public:
 
 private:
     int sock_fd_ = -1;
-    struct sockaddr_in* dest_addr_ = nullptr;
+    ::sockaddr_in* dest_addr_ = nullptr;
 };
 
 }  // namespace golf

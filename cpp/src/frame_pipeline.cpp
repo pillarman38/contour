@@ -33,6 +33,10 @@ bool FramePipeline::open(const std::string& source) {
         return false;
     }
 
+    // Force 1080p capture (avoids 4K overhead and fits 1080p displays)
+    cap_.set(cv::CAP_PROP_FRAME_WIDTH, 1920);
+    cap_.set(cv::CAP_PROP_FRAME_HEIGHT, 1080);
+
     std::cout << "[FramePipeline] Opened: " << source
               << " (" << static_cast<int>(cap_.get(cv::CAP_PROP_FRAME_WIDTH))
               << "x" << static_cast<int>(cap_.get(cv::CAP_PROP_FRAME_HEIGHT))
