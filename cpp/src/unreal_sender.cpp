@@ -42,7 +42,8 @@ bool UnrealSender::init(const std::string& host, uint16_t port) {
     return true;
 }
 
-bool UnrealSender::send(const TrackedObject& ball, const TrackedObject& putter) {
+bool UnrealSender::send(const TrackedObject& ball, const TrackedObject& putter,
+                        const PuttData& stats) {
     if (sock_fd_ < 0) return false;
 
     auto now = std::chrono::steady_clock::now();
@@ -50,8 +51,7 @@ bool UnrealSender::send(const TrackedObject& ball, const TrackedObject& putter) 
                          now.time_since_epoch())
                          .count();
 
-    // Build JSON payload (hand-rolled to avoid external dependency)
-    char buf[512];
+    char buf[1024];
     int n = std::snprintf(buf, sizeof(buf),
         "{"
             "\"timestamp_ms\":%" PRIu64 ","
@@ -64,13 +64,31 @@ bool UnrealSender::send(const TrackedObject& ball, const TrackedObject& putter) 
                 "\"x\":%.2f,\"y\":%.2f,"
                 "\"vx\":%.2f,\"vy\":%.2f,"
                 "\"conf\":%.3f,\"visible\":%s"
+            "},"
+            "\"stats\":{"
+                "\"putt_number\":%d,"
+                "\"state\":\"%s\","
+                "\"launch_speed\":%.2f,"
+                "\"current_speed\":%.2f,"
+                "\"peak_speed\":%.2f,"
+                "\"total_distance\":%.2f,"
+                "\"break_distance\":%.2f,"
+                "\"time_in_motion\":%.2f,"
+                "\"start_x\":%.2f,\"start_y\":%.2f,"
+                "\"final_x\":%.2f,\"final_y\":%.2f"
             "}"
         "}",
         ts_ms,
         ball.x, ball.y, ball.vx, ball.vy,
         ball.confidence, ball.valid ? "true" : "false",
         putter.x, putter.y, putter.vx, putter.vy,
-        putter.confidence, putter.valid ? "true" : "false");
+        putter.confidence, putter.valid ? "true" : "false",
+        stats.putt_number, stats.state_str(),
+        stats.launch_speed, stats.current_speed,
+        stats.peak_speed, stats.total_distance,
+        stats.break_distance, stats.time_in_motion,
+        stats.start_x, stats.start_y,
+        stats.final_x, stats.final_y);
 
     if (n < 0 || n >= static_cast<int>(sizeof(buf))) {
         std::cerr << "[UnrealSender] JSON format error\n";

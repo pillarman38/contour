@@ -13,6 +13,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 #include "tracker.h"
+#include "putt_stats.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -35,8 +36,9 @@ public:
     /// @param port  destination port (e.g. 7001)
     bool init(const std::string& host, uint16_t port);
 
-    /// Send the current tracker state as a JSON datagram.
-    bool send(const TrackedObject& ball, const TrackedObject& putter);
+    /// Send the current tracker state + putt stats as a JSON datagram.
+    bool send(const TrackedObject& ball, const TrackedObject& putter,
+              const PuttData& stats);
 
     /// Close the socket.
     void close();

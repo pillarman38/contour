@@ -52,6 +52,8 @@ set(SOURCES
     src/frame_pipeline.cpp
     src/tracker.cpp
     src/unreal_sender.cpp
+    src/putt_stats.cpp
+    src/stats_api.cpp
 )
 
 # ── Executable ───────────────────────────────────────────────────────────────
@@ -70,6 +72,7 @@ target_link_libraries(golf_sim PRIVATE
     ${CUDA_LIBRARIES}
     ${OpenCV_LIBS}
     cudart
+    pthread
 )
 
 # ── Install ──────────────────────────────────────────────────────────────────

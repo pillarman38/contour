@@ -1,0 +1,15 @@
+club path
+club face
+stance
+chipping
+speed of ball at different points(contour) of its travel
+shows where the putt breaks.
+Total short game
+
+game modes
+putt putt golf
+keep track of player stats
+multiple projectors to cover bigger greens
+target practice
+
+Can we also track the ball on the z axis for chipping and get stats for that?
