@@ -47,7 +47,7 @@ datasets/
 *.mov
 *.mkv
 
-# ML / model artifacts (large files — uncomment if you don't want to commit)
+# ML / model artifacts (YOLO weights, ONNX, TensorRT — downloaded by scripts)
 *.engine
 *.pt
 *.onnx
