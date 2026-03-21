@@ -1,0 +1,7 @@
+Action: Delete these specific folders:
+C:\Users\conno\AppData\Local\UnrealEngine\Common\DerivedDataCache
+C:\Users\conno\AppData\Local\D3DSCache
+
+C:\Users\conno\Desktop\projects\golf-sim\ue\GolfSimUE\DerivedDataCache
+C:\Users\conno\Desktop\projects\golf-sim\ue\GolfSimUE\Intermediate
+C:\Users\conno\Desktop\projects\golf-sim\ue\GolfSimUE\Saved

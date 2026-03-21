@@ -1,7 +1,6 @@
-/home/connorwoodford/Desktop/projects/golf-sim/cpp/build/CMakeFiles/golf_sim.dir
-/home/connorwoodford/Desktop/projects/golf-sim/cpp/build/CMakeFiles/edit_cache.dir
-/home/connorwoodford/Desktop/projects/golf-sim/cpp/build/CMakeFiles/rebuild_cache.dir
-/home/connorwoodford/Desktop/projects/golf-sim/cpp/build/CMakeFiles/list_install_components.dir
-/home/connorwoodford/Desktop/projects/golf-sim/cpp/build/CMakeFiles/install.dir
-/home/connorwoodford/Desktop/projects/golf-sim/cpp/build/CMakeFiles/install/local.dir
-/home/connorwoodford/Desktop/projects/golf-sim/cpp/build/CMakeFiles/install/strip.dir
+C:/Users/conno/Desktop/projects/golf-sim/cpp/build/CMakeFiles/golf_sim.dir
+C:/Users/conno/Desktop/projects/golf-sim/cpp/build/CMakeFiles/edit_cache.dir
+C:/Users/conno/Desktop/projects/golf-sim/cpp/build/CMakeFiles/rebuild_cache.dir
+C:/Users/conno/Desktop/projects/golf-sim/cpp/build/CMakeFiles/list_install_components.dir
+C:/Users/conno/Desktop/projects/golf-sim/cpp/build/CMakeFiles/install.dir
+C:/Users/conno/Desktop/projects/golf-sim/cpp/build/CMakeFiles/install/local.dir

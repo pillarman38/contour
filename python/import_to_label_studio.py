@@ -10,14 +10,19 @@ Prerequisites:
     2. An API key (from Account & Settings in the Label Studio UI)
 
 Usage:
-    # Import training images + labels
+    # Import training images + labels only
     python import_to_label_studio.py \
         --images ../data/images/train \
         --labels ../data/labels/train \
-        --api-key YOUR_API_KEY
+        --email YOUR_EMAIL --password YOUR_PASSWORD
+
+    # Import train AND val into one project
+    python import_to_label_studio.py --all \
+        --email YOUR_EMAIL --password YOUR_PASSWORD
 
     # Export corrected labels back to YOLO format
-    python import_to_label_studio.py --export --project-id 1 --api-key YOUR_API_KEY
+    python import_to_label_studio.py --export --project-id 1 \
+        --email YOUR_EMAIL --password YOUR_PASSWORD
 """
 
 import argparse
@@ -32,7 +37,7 @@ import requests as _requests
 from label_studio_sdk import Client
 
 # #region agent log
-LOG_PATH = "/home/connorwoodford/Desktop/projects/golf-sim/.cursor/debug.log"
+LOG_PATH = str(Path(__file__).resolve().parent.parent / "debug-import.log")
 def _dbg(hypothesisId, location, message, data=None):
     import json as _j
     entry = {"hypothesisId": hypothesisId, "location": location, "message": message, "data": data or {}, "timestamp": int(time.time()*1000)}
@@ -43,8 +48,8 @@ def _dbg(hypothesisId, location, message, data=None):
 # ── Constants ────────────────────────────────────────────────────────────────
 DEFAULT_LS_URL = "http://localhost:8080"
 
-CLASS_ID_TO_NAME = {0: "golf_ball", 1: "putter"}
-CLASS_NAME_TO_ID = {"golf_ball": 0, "putter": 1}
+CLASS_ID_TO_NAME = {0: "golf_ball", 1: "putter", 2: "hole"}
+CLASS_NAME_TO_ID = {"golf_ball": 0, "putter": 1, "hole": 2}
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 
@@ -55,6 +60,7 @@ LABELING_CONFIG = """
   <RectangleLabels name="label" toName="image">
     <Label value="golf_ball" background="#00FF00"/>
     <Label value="putter" background="#FF00FF"/>
+    <Label value="hole" background="#0000FF"/>
   </RectangleLabels>
 </View>
 """
@@ -125,9 +131,13 @@ def import_to_label_studio(
     password: str,
     project_name: str = "Golf Ball Detection",
     project_id: int | None = None,
+    sources: list[tuple[Path, Path]] | None = None,
 ):
-    """Create or reuse a project, import images, and attach pre-annotations."""
+    """Create or reuse a project, import images, and attach pre-annotations.
 
+    When sources is provided (e.g. for --all), it overrides images_dir/labels_dir.
+    sources = [(images_dir, labels_dir), ...] for multiple directories.
+    """
     sess = _create_session(ls_url, email, password)
 
     if project_id:
@@ -168,38 +178,57 @@ def import_to_label_studio(
         project_id = project_data["id"]
         print(f"[INFO] Created project: '{project_name}' (id={project_id})")
 
-    # Collect images
-    image_files = sorted(
-        p for p in images_dir.iterdir()
-        if p.suffix.lower() in IMAGE_EXTENSIONS
-    )
-    if not image_files:
-        print(f"[ERROR] No images in {images_dir}")
+    # Build (img_path, label_path, upload_name) entries from sources or single dir
+    # upload_name is used for LS upload and matching; may have prefix to avoid duplicates
+    image_entries: list[tuple[Path, Path, str]] = []
+    if sources:
+        seen_names: set[str] = set()
+        for imdir, laldir in sources:
+            if not imdir.exists():
+                print(f"[WARN] Skipping missing directory: {imdir}")
+                continue
+            for p in sorted(imdir.iterdir()):
+                if p.suffix.lower() in IMAGE_EXTENSIONS:
+                    label_path = laldir / (p.stem + ".txt")
+                    upload_name = p.name
+                    if upload_name in seen_names and len(sources) > 1:
+                        upload_name = f"{imdir.name}_{p.name}"
+                    seen_names.add(upload_name)
+                    image_entries.append((p, label_path, upload_name))
+    else:
+        for p in sorted(images_dir.iterdir()):
+            if p.suffix.lower() in IMAGE_EXTENSIONS:
+                label_path = labels_dir / (p.stem + ".txt")
+                image_entries.append((p, label_path, p.name))
+
+    if not image_entries:
+        print("[ERROR] No images found in the given directory(ies)")
         sys.exit(1)
 
-    print(f"[INFO] Uploading {len(image_files)} images via import endpoint...")
+    # Unique upload name per entry (for matching after fetch)
+    upload_names = [ent[2] for ent in image_entries]
 
-    # Upload images directly through the import endpoint (multipart form data).
-    # This creates tasks automatically.
-    for idx, img_path in enumerate(image_files, start=1):
+    print(f"[INFO] Uploading {len(image_entries)} images via import endpoint...")
+
+    for idx, (img_path, _, upload_name) in enumerate(image_entries, start=1):
         csrf = sess.cookies.get("csrftoken", "")
         with open(img_path, "rb") as f:
             resp = sess.post(
                 f"{ls_url}/api/projects/{project_id}/import",
-                files={"file": (img_path.name, f, "image/png")},
+                files={"file": (upload_name, f, "image/png")},
                 headers={"X-CSRFToken": csrf},
             )
         # #region agent log
-        _dbg("H1", f"import:upload_{idx}", "File import result", {"file": img_path.name, "status": resp.status_code, "body": resp.text[:300]})
+        _dbg("H1", f"import:upload_{idx}", "File import result", {"file": upload_name, "status": resp.status_code, "body": resp.text[:300]})
         # #endregion
         if resp.status_code in (200, 201):
-            print(f"  [{idx}/{len(image_files)}] Imported: {img_path.name}")
+            print(f"  [{idx}/{len(image_entries)}] Imported: {upload_name}")
         else:
-            print(f"  [{idx}/{len(image_files)}] FAILED ({resp.status_code}): {img_path.name}")
+            print(f"  [{idx}/{len(image_entries)}] FAILED ({resp.status_code}): {upload_name}")
 
     # Fetch all tasks from the project to get task IDs and map to filenames
     print("[INFO] Fetching tasks to attach predictions...")
-    filename_to_task_id = {}
+    filename_to_task_id: dict[str, int] = {}
     page = 1
     while True:
         resp = sess.get(f"{ls_url}/api/tasks", params={
@@ -213,12 +242,9 @@ def import_to_label_studio(
         for task in tasks_list:
             task_id = task.get("id")
             image_url = task.get("data", {}).get("image", "")
-            # LS prepends a UUID prefix to uploaded filenames, e.g.
-            # "/data/upload/20/85d18acf-frame_000001.png"
-            # Match by checking which original filename the URL ends with.
-            for img in image_files:
-                if image_url.endswith(img.name):
-                    filename_to_task_id[img.name] = task_id
+            for upload_name in upload_names:
+                if image_url.endswith(upload_name):
+                    filename_to_task_id[upload_name] = task_id
                     break
         # #region agent log
         _dbg("H2", "import:fetch_tasks", "Fetched tasks page", {"page": page, "count": len(tasks_list), "sample_map": dict(list(filename_to_task_id.items())[:3])})
@@ -235,12 +261,11 @@ def import_to_label_studio(
 
     # Add pre-annotations (predictions) to tasks that have matching YOLO labels
     pre_annotated = 0
-    for img_path in image_files:
-        task_id = filename_to_task_id.get(img_path.name)
+    for img_path, label_path, upload_name in image_entries:
+        task_id = filename_to_task_id.get(upload_name)
         if not task_id:
             continue
 
-        label_path = labels_dir / (img_path.stem + ".txt")
         if not label_path.exists():
             continue
 
@@ -379,11 +404,31 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # Import mode (default)
     parser.add_argument(
         "--images", type=str, default="../data/images/train",
-        help="Image directory to import"
+        help="Image directory to import (ignored when --all)"
     )
     parser.add_argument(
         "--labels", type=str, default="../data/labels/train",
-        help="YOLO label directory for pre-annotations"
+        help="YOLO label directory for pre-annotations (ignored when --all)"
+    )
+    parser.add_argument(
+        "--all", action="store_true",
+        help="Import both train and val into one project"
+    )
+    parser.add_argument(
+        "--images-train", type=str, default="./data/images/train",
+        help="Train images dir (used with --all)"
+    )
+    parser.add_argument(
+        "--labels-train", type=str, default="./data/labels/train",
+        help="Train labels dir (used with --all)"
+    )
+    parser.add_argument(
+        "--images-val", type=str, default="./data/images/val",
+        help="Val images dir (used with --all)"
+    )
+    parser.add_argument(
+        "--labels-val", type=str, default="./data/labels/val",
+        help="Val labels dir (used with --all)"
     )
     parser.add_argument(
         "--project-name", default="Golf Ball Detection",
@@ -425,6 +470,13 @@ def main():
             password=args.password,
         )
     else:
+        sources = None
+        if args.all:
+            sources = [
+                (Path(args.images_train), Path(args.labels_train)),
+                (Path(args.images_val), Path(args.labels_val)),
+            ]
+            print(f"[INFO] --all: importing from train + val into one project")
         import_to_label_studio(
             images_dir=Path(args.images),
             labels_dir=Path(args.labels),
@@ -433,6 +485,7 @@ def main():
             password=args.password,
             project_name=args.project_name,
             project_id=args.project_id,
+            sources=sources,
         )
 
 

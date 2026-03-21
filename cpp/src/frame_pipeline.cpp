@@ -12,8 +12,9 @@ namespace golf {
 static const cv::Scalar kColors[] = {
     {0, 255, 0},    // golf_ball  → green
     {255, 0, 255},  // putter     → magenta
+    {0, 0, 255},    // hole       → blue
 };
-static const char* kClassNames[] = {"golf_ball", "putter"};
+static const char* kClassNames[] = {"golf_ball", "putter", "hole"};
 
 // ─── Open ───────────────────────────────────────────────────────────────────
 bool FramePipeline::open(const std::string& source) {
@@ -95,6 +96,9 @@ std::vector<Detection> FramePipeline::parse_detections(
         d.y2 = row[3] * sy;
         d.confidence = conf;
         d.class_id = static_cast<int>(row[5]);
+        // TODO: fix properly – model learned putter/hole swapped; swap at inference for now
+        if (d.class_id == 1) d.class_id = 2;
+        else if (d.class_id == 2) d.class_id = 1;
 
         dets.push_back(d);
     }
@@ -104,7 +108,7 @@ std::vector<Detection> FramePipeline::parse_detections(
 // ─── Draw ───────────────────────────────────────────────────────────────────
 void FramePipeline::draw(cv::Mat& frame, const std::vector<Detection>& dets) {
     for (const auto& d : dets) {
-        int cid = std::clamp(d.class_id, 0, 1);
+        int cid = std::clamp(d.class_id, 0, 2);
         cv::Scalar color = kColors[cid];
 
         cv::rectangle(frame,

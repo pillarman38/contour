@@ -9,11 +9,12 @@
 
 namespace golf {
 
-PuttStats::PuttStats(float motion_threshold, int stop_frames)
+PuttStats::PuttStats(float motion_threshold, int stop_frames, float max_motion_sec)
     : motion_threshold_(motion_threshold),
-      stop_frames_required_(stop_frames) {}
+      stop_frames_required_(stop_frames),
+      max_motion_sec_(max_motion_sec) {}
 
-void PuttStats::update(const TrackedObject& ball, double dt) {
+void PuttStats::update(const TrackedObject& ball, double dt, float ppi) {
     std::lock_guard<std::mutex> lock(mu_);
 
     if (!ball.valid) {
@@ -21,31 +22,35 @@ void PuttStats::update(const TrackedObject& ball, double dt) {
         return;
     }
 
-    float speed = std::sqrt(ball.vx * ball.vx + ball.vy * ball.vy);
-    current_.current_speed = speed;
+    float speed_ips = std::sqrt(ball.vx * ball.vx + ball.vy * ball.vy) / ppi;
+    current_.current_speed = speed_ips;
 
     // Accumulate distance from frame-to-frame movement
     if (has_prev_) {
         float dx = ball.x - prev_x_;
         float dy = ball.y - prev_y_;
-        float frame_dist = std::sqrt(dx * dx + dy * dy);
+        // Convert frame distance to inches
+        float frame_dist_inches = std::sqrt(dx * dx + dy * dy) / ppi;
 
         if (current_.state == PuttState::IN_MOTION) {
-            current_.total_distance += frame_dist;
+            current_.total_distance += frame_dist_inches;
             current_.time_in_motion += static_cast<float>(dt);
 
-            if (speed > current_.peak_speed) {
-                current_.peak_speed = speed;
+            if (speed_ips > current_.peak_speed) {
+                current_.peak_speed = speed_ips;
             }
 
-            // Compute break: perpendicular distance from the initial putt line
+            frame_samples_.push_back({ speed_ips, current_.total_distance, current_.time_in_motion, ball.x, ball.y });
+
             if (has_direction_) {
                 float rx = ball.x - current_.start_x;
                 float ry = ball.y - current_.start_y;
-                // Cross product gives signed perpendicular distance
-                float cross = std::abs(rx * dir_y_ - ry * dir_x_);
-                if (cross > current_.break_distance) {
-                    current_.break_distance = cross;
+                // Convert perpendicular break to inches
+                float cross_px = std::abs(rx * dir_y_ - ry * dir_x_);
+                float cross_inches = cross_px / ppi;
+                
+                if (cross_inches > current_.break_distance) {
+                    current_.break_distance = cross_inches;
                 }
             }
 
@@ -58,37 +63,30 @@ void PuttStats::update(const TrackedObject& ball, double dt) {
     prev_y_ = ball.y;
     has_prev_ = true;
 
-    // State transitions
+    // State transitions (Using speed_ips for thresholding)
     switch (current_.state) {
         case PuttState::IDLE:
-            if (speed > motion_threshold_) {
+        case PuttState::STOPPED:
+            if (speed_ips > motion_threshold_) {
                 current_.state = PuttState::IN_MOTION;
                 current_.putt_number = static_cast<int>(history_.size()) + 1;
-                current_.launch_speed = speed;
-                current_.peak_speed = speed;
+                current_.launch_speed = speed_ips;
+                current_.peak_speed = speed_ips;
                 current_.total_distance = 0.f;
                 current_.break_distance = 0.f;
                 current_.time_in_motion = 0.f;
                 current_.start_x = ball.x;
                 current_.start_y = ball.y;
-                current_.final_x = ball.x;
-                current_.final_y = ball.y;
-
-                // Capture initial direction for break computation
-                float vmag = std::sqrt(ball.vx * ball.vx + ball.vy * ball.vy);
-                if (vmag > 1e-6f) {
-                    dir_x_ = ball.vx / vmag;
-                    dir_y_ = ball.vy / vmag;
-                    has_direction_ = true;
-                } else {
-                    has_direction_ = false;
-                }
-                frames_below_threshold_ = 0;
+                frame_samples_.clear();
+                frame_samples_.push_back({ speed_ips, 0.f, 0.f, ball.x, ball.y });
             }
             break;
 
         case PuttState::IN_MOTION:
-            if (speed < motion_threshold_) {
+            if (current_.time_in_motion >= max_motion_sec_) {
+                current_.state = PuttState::STOPPED;
+                finalize_putt();
+            } else if (speed_ips < motion_threshold_) {
                 frames_below_threshold_++;
                 if (frames_below_threshold_ >= stop_frames_required_) {
                     current_.state = PuttState::STOPPED;
@@ -98,33 +96,14 @@ void PuttStats::update(const TrackedObject& ball, double dt) {
                 frames_below_threshold_ = 0;
             }
             break;
+    }
+}
 
-        case PuttState::STOPPED:
-            if (speed > motion_threshold_) {
-                // New putt begins
-                current_.state = PuttState::IN_MOTION;
-                current_.putt_number = static_cast<int>(history_.size()) + 1;
-                current_.launch_speed = speed;
-                current_.peak_speed = speed;
-                current_.total_distance = 0.f;
-                current_.break_distance = 0.f;
-                current_.time_in_motion = 0.f;
-                current_.start_x = ball.x;
-                current_.start_y = ball.y;
-                current_.final_x = ball.x;
-                current_.final_y = ball.y;
-
-                float vmag = std::sqrt(ball.vx * ball.vx + ball.vy * ball.vy);
-                if (vmag > 1e-6f) {
-                    dir_x_ = ball.vx / vmag;
-                    dir_y_ = ball.vy / vmag;
-                    has_direction_ = true;
-                } else {
-                    has_direction_ = false;
-                }
-                frames_below_threshold_ = 0;
-            }
-            break;
+void PuttStats::on_ball_lost() {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (current_.state == PuttState::IN_MOTION) {
+        current_.state = PuttState::STOPPED;
+        finalize_putt();
     }
 }
 
@@ -159,6 +138,20 @@ PuttStats::SessionSummary PuttStats::session() const {
 }
 
 void PuttStats::finalize_putt() {
+    if (!frame_samples_.empty()) {
+        current_.launch_speed = frame_samples_.front().speed_ips;
+        current_.total_distance = frame_samples_.back().cumulative_distance;
+        current_.time_in_motion = frame_samples_.back().time_in_motion;
+        float peak = 0.f;
+        for (const auto& s : frame_samples_) {
+            if (s.speed_ips > peak) {
+                peak = s.speed_ips;
+                current_.peak_speed_x = s.x;
+                current_.peak_speed_y = s.y;
+            }
+        }
+        current_.peak_speed = peak;
+    }
     history_.push_back(current_);
 }
 

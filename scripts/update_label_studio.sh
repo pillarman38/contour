@@ -1,0 +1,1 @@
+python ./python/import_to_label_studio.py --images ./data/images/train --labels ./data/labels/train --email connorwoodford@yahoo.com --password "Goodkid38!!**()"

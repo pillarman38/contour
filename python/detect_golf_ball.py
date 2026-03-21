@@ -19,8 +19,8 @@ from ultralytics import YOLO
 
 
 # ── Class IDs ────────────────────────────────────────────────────────────────
-CLASS_NAMES = {0: "golf_ball", 1: "putter"}
-CLASS_COLORS = {0: (0, 255, 0), 1: (255, 0, 255)}  # BGR: green for ball, magenta for putter
+CLASS_NAMES = {0: "golf_ball", 1: "putter", 2: "hole"}
+CLASS_COLORS = {0: (0, 255, 0), 1: (255, 0, 255), 2: (0, 0, 255)}  # BGR: green for ball, magenta for putter, red for hole
 
 
 def detect_ball_by_color(frame, min_radius=5, max_radius=80):
@@ -84,12 +84,13 @@ def detect_ball_by_color(frame, min_radius=5, max_radius=80):
 
 def train(
     data_yaml: str,
-    weights: str = "yolov10n.pt",
+    weights: str = "yolov10x.pt",
     epochs: int = 100,
     img_size: int = 640,
     batch_size: int = 32,
     project: str = "runs/train",
     name: str = "golf_ball_detector",
+    cache: bool = True,
 ):
     """Fine-tune YOLOv10 on the golf-ball dataset."""
     model = YOLO(weights)
@@ -103,6 +104,7 @@ def train(
         patience=20,
         save=True,
         plots=True,
+        cache=cache,
     )
     print(f"[INFO] Training complete. Results in {project}/{name}")
     return model
@@ -142,6 +144,8 @@ def detect(
 
         for box in boxes:
             cls_id = int(box.cls[0])
+            # TODO: fix properly – model learned putter/hole swapped; swap at inference for now
+            cls_id = {1: 2, 2: 1}.get(cls_id, cls_id)
             confidence = float(box.conf[0])
             x1, y1, x2, y2 = box.xyxy[0].tolist()
             label = CLASS_NAMES.get(cls_id, f"class_{cls_id}")
@@ -212,6 +216,8 @@ def live(
 
                 for box in boxes:
                     cls_id = int(box.cls[0])
+                    # TODO: fix properly – model learned putter/hole swapped; swap at inference for now
+                    cls_id = {1: 2, 2: 1}.get(cls_id, cls_id)
                     confidence = float(box.conf[0])
                     x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
                     label = CLASS_NAMES.get(cls_id, f"class_{cls_id}")
@@ -281,10 +287,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # ── train ────────────────────────────────────────────────────────────
     p_train = sub.add_parser("train", help="Train the model")
     p_train.add_argument("--data", required=True, help="Path to data.yaml")
-    p_train.add_argument("--weights", default="yolov10n.pt", help="Base weights")
+    p_train.add_argument("--weights", default="yolov10x.pt", help="Base weights")
     p_train.add_argument("--epochs", type=int, default=100)
-    p_train.add_argument("--img-size", type=int, default=640)
+    p_train.add_argument("--img-size", type=int, default=640, help="Input size (640 for small objects; use 640 if OOM)")
     p_train.add_argument("--batch", type=int, default=16)
+    p_train.add_argument("--no-cache", action="store_true", help="Disable image caching (use if OOM)")
 
     # ── export ───────────────────────────────────────────────────────────
     p_export = sub.add_parser("export", help="Export to ONNX")
@@ -322,6 +329,7 @@ def main():
             epochs=args.epochs,
             img_size=args.img_size,
             batch_size=args.batch,
+            cache=not args.no_cache,
         )
     elif args.command == "export":
         export_onnx(weights=args.weights, img_size=args.img_size)

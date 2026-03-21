@@ -1,0 +1,75 @@
+.games-container {
+  padding: 1rem 1.5rem 2rem;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.games-title {
+  margin: 0 0 0.25rem;
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.games-subtitle {
+  margin: 0 0 1.5rem;
+  color: #666;
+  font-size: 0.95rem;
+}
+
+.games-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.game-card {
+  background: #f5f5f5;
+  border: 1px solid #e0e0e0;
+  border-radius: 12px;
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.game-name {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.game-description {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #444;
+  line-height: 1.45;
+}
+
+.game-players {
+  font-size: 0.8rem;
+  color: #666;
+}
+
+.game-play-btn {
+  align-self: flex-start;
+  margin-top: 0.5rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  font-weight: 500;
+  background: #2d5a27;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.game-play-btn:hover {
+  background: #3d6a37;
+}
+
+.game-play-btn:active {
+  background: #2a5524;
+}

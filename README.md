@@ -139,8 +139,8 @@ cd python
 python import_to_label_studio.py \
     --images ../data/images/train \
     --labels ../data/labels/train \
-    --email your@email.com \
-    --password yourpassword
+    --email connorwoodford@yahoo.com \
+    --password 'Goodkid38!!**()'
 
 # Re-import into an EXISTING project (clears old tasks, re-uploads everything)
 # Use this when training data has been updated -- no need to delete the project
@@ -216,17 +216,19 @@ python detect_golf_ball.py train \
     --data ../configs/golf_ball_dataset.yaml \
     --weights yolov10n.pt \
     --epochs 100 \
-    --img-size 640 \
-    --batch 16
+    --batch 8
 ```
+
+Defaults: `--img-size 1280` (better for small objects like golf balls), `cache=True`. If you hit OOM, use `--img-size 640 --batch 16 --no-cache`.
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--data PATH` | *required* | Path to dataset YAML config |
 | `--weights PATH` | `yolov10n.pt` | Base model weights |
 | `--epochs N` | `100` | Number of training epochs |
-| `--img-size N` | `640` | Input image size |
-| `--batch N` | `16` | Batch size |
+| `--img-size N` | `1280` | Input size (640 if OOM) |
+| `--batch N` | `16` | Batch size (reduce to 4–8 for imgsz 1280) |
+| `--no-cache` | off | Disable image caching |
 
 ---
 
@@ -320,22 +322,22 @@ cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
 
 # If TensorRT is in a non-standard location:
-cmake .. -DCMAKE_BUILD_TYPE=Release -DTENSORRT_DIR=/path/to/TensorRT
+cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DCUDA_TOOLKIT_ROOT_DIR="C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1" -DOpenCV_DIR="C:/Users/conno/Downloads/opencv/build/x64/vc16/lib"
 ```
 
 #### Run
 
 ```bash
 # Webcam with GUI preview
-./golf_sim --engine ../../models/golf.engine --source 0
+./golf_sim --engine /home/connorwoodford/Desktop/projects/golf-sim/python/runs/detect/runs/train/golf_ball_detector/weights/best.engine --source 0
 
 # Video file with custom Unreal Engine endpoint
-./golf_sim --engine ../../models/golf.engine \
+./golf_sim --engine /home/connorwoodford/Desktop/projects/golf-sim/python/runs/detect/runs/train/golf_ball_detector/weights/best.engine \
            --source ../../data/test_video.mp4 \
            --host 192.168.1.100 --port 7001
 
 # Headless mode (no preview window)
-./golf_sim --engine ../../models/golf.engine --source 0 --no-gui
+./golf_sim --engine /home/connorwoodford/Desktop/projects/golf-sim/python/runs/detect/runs/train/golf_ball_detector/weights/best.engine --source 0 --no-gui
 ```
 
 | Flag | Default | Description |
@@ -359,6 +361,10 @@ bash scripts/clear_training_data.sh
 
 # Skip confirmation
 bash scripts/clear_training_data.sh --force
+
+# to rebuild the project in unreal run and make sure unreal is closed and all epic/unreal processes are killed
+& "C:\Program Files\Epic Games\UE_5.7\Engine\Build\BatchFiles\Build.bat" GolfSimUEEditor Win64 Development -Project="C:\Users\conno\Desktop\projects\golf-sim\ue\GolfSimUE\GolfSimUE.uproject"     
+
 ```
 
 | Flag | Default | Description |
@@ -391,6 +397,15 @@ The C++ pipeline sends JSON datagrams over UDP on every frame:
 
 In your Unreal project, create a UDP listener on port **7001** and parse the
 incoming JSON to drive your game logic (ball physics, putter position, etc.).
+
+### Ball-to-hole contour line
+
+The **Ball to Hole Line** actor (`BallToHoleLineActor`) draws a spline mesh
+between the ball and the hole that follows the green surface. Place **Ball to
+Hole Line** in the level, set **Enable Line** to true, then either set **Golf Receiver** to your UDP Golf Receiver or set **Ball Actor** and **Hole Actor** manually. Assign **Line Mesh** (e.g. Engine → Basic Shapes → Plane) so the line is visible; optionally set **Line Material**. (Enable Line is off by default to avoid load-time issues when opening the project.) The actor samples points between ball and hole,
+line-traces down to the green, and builds a spline with mesh segments each frame.
+Ensure the green has **collision** enabled and that **Trace Channel** (e.g. Visibility)
+hits it.
 
 ---
 

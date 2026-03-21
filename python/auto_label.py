@@ -29,18 +29,19 @@ import numpy as np
 from autodistill_grounding_dino import GroundingDINO
 from autodistill.detection import CaptionOntology
 
-
 # ── Class mapping (must match configs/golf_ball_dataset.yaml) ────────────────
 # Maps natural-language prompts → YOLO class names
 ONTOLOGY = CaptionOntology({
     "small white round ball": "golf_ball",
-    "metal putter head":      "putter",
+    "golf putter head rounded back curved shape": "putter",
+    "A circular hole in a green putting mat with a small orange flagstick standing in the center.": "hole",
 })
 
 # YOLO class IDs
 CLASS_NAME_TO_ID = {
     "golf_ball": 0,
     "putter":    1,
+    "hole":      2,
 }
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}

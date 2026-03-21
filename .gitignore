@@ -1,0 +1,78 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Golf Sim - Root .gitignore
+# ─────────────────────────────────────────────────────────────────────────────
+
+# C++ / CMake
+cpp/build/
+cpp/out/
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+*.o
+*.obj
+
+# Unreal Engine
+ue/**/Intermediate/
+ue/**/Binaries/
+ue/**/Saved/
+*.sln
+*.suo
+*.opensdf
+*.sdf
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+.eggs/
+venv/
+.venv/
+env/
+python/runs/
+python/**/runs/
+python/GoodPreviouslyTrainedModels/
+
+# Training data (images, labels, videos — keep local / use DVC/Git LFS if needed)
+data/
+datasets/
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# ML / model artifacts (large files — uncomment if you don't want to commit)
+*.engine
+*.pt
+*.onnx
+*.weights
+
+# Debug / logs
+debug*.log
+*.log
+
+# IDE / editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Cursor
+.cursor/
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Angular / Node (contour has its own; these cover root-level)
+node_modules/
+dist/
+.angular/

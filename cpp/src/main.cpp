@@ -20,8 +20,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -111,21 +114,22 @@ int main(int argc, char** argv) {
     // ── 4. Init Tracker ─────────────────────────────────────────────────
     golf::Tracker tracker(/*alpha=*/0.6f, /*max_lost=*/15);
 
-    // ── 5. Init Putt Stats ──────────────────────────────────────────────
-    golf::PuttStats putt_stats(/*motion_threshold=*/5.f, /*stop_frames=*/15);
+    golf::PuttStats putt_stats(2.0f, 45);  // 45 frames (~1.5s at 30fps) low speed before STOPPED; reduces spurious transitions during slow rolls
+    auto prev_time = std::chrono::steady_clock::now();
 
-    // ── 6. Start REST API ───────────────────────────────────────────────
-    golf::StatsApi api(putt_stats, cfg.api_port);
+    golf::TrackingState tracking_state;
+    golf::StatsApi api(putt_stats, &tracking_state, cfg.api_port);
     api.start();
 
-    // ── 7. Main Loop ────────────────────────────────────────────────────
+    // --- 3. Main Loop ---
     cv::Mat frame;
     std::vector<float> blob;
     std::vector<float> output;
-
-    auto prev_time = std::chrono::steady_clock::now();
     int frame_count = 0;
-
+    int putt_made_frames = 0;
+    const int putt_made_hold = 60;
+    // Snapshot of the last completed putt's stats (used for "putt made" payloads)
+    golf::PuttData last_completed_stats;
     std::cout << "[Main] Entering inference loop (press 'q' to quit)\n";
 
     while (pipeline.read(frame)) {
@@ -153,13 +157,131 @@ int main(int argc, char** argv) {
             orig_w, orig_h, engine.input_w(), engine.input_h());
 
         // Track
+        int target_idx = api.get_target_hole_index();
+        tracker.set_target_hole_index(target_idx);
+        bool ball_was_visible = tracker.ball_visible();
         tracker.update(detections, dt);
 
-        // Compute putt stats
-        putt_stats.update(tracker.ball(), dt);
+        // Update tracking snapshot for GET /api/tracking
+        {
+            std::lock_guard<std::mutex> lock(tracking_state.mutex);
+            int api_ti = api.get_target_hole_index();
+            tracking_state.snapshot.target_hole_index = (api_ti >= 0) ? api_ti : tracker.primary_hole_index();
+            tracking_state.snapshot.target_hole_x = tracker.hole_pos().x;
+            tracking_state.snapshot.target_hole_y = tracker.hole_pos().y;
+            tracking_state.snapshot.frame_width = orig_w;
+            tracking_state.snapshot.frame_height = orig_h;
+            tracking_state.snapshot.balls.clear();
+            for (const auto& b : tracker.balls()) {
+                golf::TrackingSnapshot::BallInfo bi;
+                bi.x = b.x;
+                bi.y = b.y;
+                bi.visible = b.valid;
+                bi.index = b.stable_id;  // stable identity; next ball to appear gets recycled ID
+                bi.username = api.get_username_for_ball_or_fallback(b.stable_id, tracker.balls().size());
+                bi.target_hole_index = api.get_target_hole_for_ball(b.stable_id);
+                tracking_state.snapshot.balls.push_back(bi);
+            }
+            tracking_state.snapshot.users = api.get_user_states();
+            tracking_state.snapshot.holes.clear();
+            for (const auto& h : tracker.holes()) {
+                golf::TrackingSnapshot::HoleInfo hi;
+                hi.x = h.x;
+                hi.y = h.y;
+                hi.radius = h.radius;
+                hi.visible = h.valid;
+                tracking_state.snapshot.holes.push_back(hi);
+            }
+        }
+        if (ball_was_visible && !tracker.ball_visible()) {
+            putt_stats.on_ball_lost();  // Ball lost before slowing down: transition to STOPPED so UE can fade
+        }
+        // In your main loop:
+        float current_ppi = 1.0f;
+        if (tracker.hole_pos().valid) {
+            // Hole is 4.25 inches wide. r * 2 = diameter.
+            current_ppi = (tracker.hole_pos().radius * 2.0f) / 4.25f;
+        }
 
-        // Send to Unreal Engine
-        sender.send(tracker.ball(), tracker.putter(), putt_stats.current());
+        // Compute putt stats (pass PPI so values are in inches, not pixels)
+        putt_stats.update(tracker.ball(), dt, current_ppi);
+
+        // New putt started (ball in motion) — allow "Putt ended" to fire again next time ball is lost
+        if (putt_stats.current().state == golf::PuttState::IN_MOTION) {
+            tracker.reset_for_new_putt();
+        }
+
+        // Hold putt_made true for multiple frames so UE reliably catches it.
+        // When the putt is first detected as made, snapshot the current stats so the
+        // payload that carries putt_made=true also carries this putt's numbers.
+        if (tracker.is_putt_made && putt_made_frames == 0) {
+            putt_made_frames = putt_made_hold;
+            last_completed_stats = putt_stats.current();
+            last_completed_stats.state = golf::PuttState::STOPPED;
+            tracker.reset_putt();
+        }
+        bool send_putt_made = putt_made_frames > 0;
+        if (putt_made_frames > 0) putt_made_frames--;
+
+        // Only send completed putt stats when putt is STOPPED; otherwise send zeros so UI shows 0 until next putt completes.
+        auto current = putt_stats.current();
+        golf::PuttData stats_to_send;
+        stats_to_send.state = current.state;  // Always send current state (idle/in_motion/stopped) for line freeze etc.
+
+        // When PuttStats reaches STOPPED, refresh our snapshot of the completed putt.
+        if (current.state == golf::PuttState::STOPPED) {
+            last_completed_stats = current;
+        }
+
+        // For frames where we flag putt_made=true, send the completed-putt snapshot
+        // so Unreal's OnPuttMade event sees non-zero stats for that putt.
+        // Send full stats for both IN_MOTION and STOPPED so Unreal can show markers (needs StartPos, LaunchSpeed for bHasLaunchPos).
+        if (send_putt_made && last_completed_stats.putt_number > 0) {
+            stats_to_send = last_completed_stats;
+        } else if (current.state == golf::PuttState::STOPPED || current.state == golf::PuttState::IN_MOTION) {
+            stats_to_send = current;  // Full stats so Unreal displays launch/peak/stop markers.
+        }
+
+        std::vector<golf::UnrealSender::BallPayload> ball_payloads;
+        const auto& balls_vec = tracker.balls();
+        int ti;
+        int ti_raw = -999;
+        if (balls_vec.empty()) {
+            ti = api.get_target_hole_index();
+        } else {
+            ti_raw = api.get_target_hole_for_ball(balls_vec[0].stable_id);
+            ti = ti_raw;
+        }
+        if (ti < 0) ti = tracker.primary_hole_index();
+        // Hole position for aim line: user's selected hole or tracker primary
+        const auto& holes_vec = tracker.holes();
+        float thx, thy;
+        if (ti >= 0 && static_cast<size_t>(ti) < holes_vec.size()) {
+            thx = holes_vec[ti].x;
+            thy = holes_vec[ti].y;
+        } else {
+            const auto& hp = tracker.hole_pos();
+            thx = hp.x;
+            thy = hp.y;
+        }
+        if (balls_vec.empty()) {
+            golf::UnrealSender::BallPayload bp;
+            bp.ball = &tracker.ball();
+            bp.username = tracker.ball().valid ? api.get_username_for_ball_or_fallback(tracker.ball().stable_id, 1) : "";
+            bp.stats = stats_to_send;
+            bp.is_putt_made = send_putt_made;
+            ball_payloads.push_back(bp);
+        } else {
+            for (size_t i = 0; i < balls_vec.size(); ++i) {
+                golf::UnrealSender::BallPayload bp;
+                bp.ball = &balls_vec[i];
+                bp.username = api.get_username_for_ball_or_fallback(balls_vec[i].stable_id, balls_vec.size());
+                bp.stats = (i == 0) ? stats_to_send : golf::PuttData{};
+                bp.is_putt_made = (i == 0) ? send_putt_made : false;
+                ball_payloads.push_back(bp);
+            }
+        }
+        sender.send(ball_payloads, tracker.putter(), tracker.holes(), ti, thx, thy);
 
         // Visualise
         if (cfg.show_gui) {
@@ -185,11 +307,29 @@ int main(int argc, char** argv) {
                             cv::Scalar(255, 0, 255), 2);
             }
 
+            {
+                float ball_speed_px = std::sqrt(tracker.ball().vx * tracker.ball().vx +
+                                                tracker.ball().vy * tracker.ball().vy);
+                std::snprintf(info, sizeof(info),
+                    "distance from hole: %f, ball speed: %f",
+                    tracker.min_dist_px, ball_speed_px);
+                cv::putText(frame, info, cv::Point(10, 80),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.9,
+                            cv::Scalar(0, 200, 255), 1);
+            }
+
+            // Putt made banner
+            if (send_putt_made) {
+                cv::putText(frame, "PUTT MADE!", cv::Point(orig_w / 2 - 150, orig_h / 2),
+                            cv::FONT_HERSHEY_SIMPLEX, 1.5,
+                            cv::Scalar(0, 255, 0), 3);
+            }
+
             // Putt stats overlay
             auto stats = putt_stats.current();
             std::snprintf(info, sizeof(info), "Putt #%d [%s]",
                 stats.putt_number, stats.state_str());
-            cv::putText(frame, info, cv::Point(10, 80),
+            cv::putText(frame, info, cv::Point(10, 110),
                         cv::FONT_HERSHEY_SIMPLEX, 0.5,
                         cv::Scalar(0, 255, 255), 1);
 
@@ -197,9 +337,20 @@ int main(int argc, char** argv) {
                 "Speed: %.1f  Peak: %.1f  Dist: %.1f  Break: %.1f",
                 stats.current_speed, stats.peak_speed,
                 stats.total_distance, stats.break_distance);
-            cv::putText(frame, info, cv::Point(10, 100),
-                        cv::FONT_HERSHEY_SIMPLEX, 0.45,
+            cv::putText(frame, info, cv::Point(10, 130),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.5,
                         cv::Scalar(0, 255, 255), 1);
+
+            // Confidence & tracking health
+            std::snprintf(info, sizeof(info),
+                "Conf  Ball: %.0f%%  Putter: %.0f%%  Lost: %d / %d",
+                tracker.ball().confidence * 100.f,
+                tracker.putter().confidence * 100.f,
+                tracker.ball().frames_since_seen,
+                tracker.putter().frames_since_seen);
+            cv::putText(frame, info, cv::Point(10, 155),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.45,
+                        cv::Scalar(180, 180, 180), 1);
 
             // FPS
             double fps = (dt > 1e-6) ? 1.0 / dt : 0.0;

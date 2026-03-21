@@ -100,10 +100,8 @@ CMD=(
     --onnx="${ONNX_PATH}"
     --saveEngine="${ENGINE_PATH}"
     --memPoolSize=workspace:"${WORKSPACE_MB}MiB"
-    --optShapes="${INPUT_NAME}:${INPUT_SHAPE}"
-    --minShapes="${INPUT_NAME}:${INPUT_SHAPE}"
-    --maxShapes="${INPUT_NAME}:${INPUT_SHAPE}"
 )
+
 
 case "${PRECISION}" in
     fp16) CMD+=(--fp16) ;;

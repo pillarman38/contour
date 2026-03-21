@@ -1,0 +1,1 @@
+& "C:\Program Files\Epic Games\UE_5.7\Engine\Build\BatchFiles\Build.bat" GolfSimUEEditor Win64 Development -Project="C:\Users\conno\Desktop\projects\golf-sim\ue\GolfSimUE\GolfSimUE.uproject"

@@ -1,0 +1,17 @@
+<div class="games-container">
+  <h2 class="games-title">Putting Games</h2>
+  <p class="games-subtitle">Multiplayer games to play on the green. Select a game to get started.</p>
+
+  <div class="games-list">
+    @for (game of games; track game.id) {
+      <article class="game-card">
+        <h3 class="game-name">{{ game.name }}</h3>
+        <p class="game-description">{{ game.description }}</p>
+        <span class="game-players">{{ game.minPlayers }}–{{ game.maxPlayers }} players</span>
+        <button class="game-play-btn" type="button" (click)="playGame(game)">
+          Play
+        </button>
+      </article>
+    }
+  </div>
+</div>

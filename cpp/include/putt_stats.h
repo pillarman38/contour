@@ -17,6 +17,14 @@ namespace golf {
 
 enum class PuttState { IDLE, IN_MOTION, STOPPED };
 
+/** Per-frame sample during a putt; we derive peak/launch/total from the array when putt completes. */
+struct PuttFrameSample {
+    float speed_ips = 0.f;           // speed this frame (in/s)
+    float cumulative_distance = 0.f; // total distance so far (inches)
+    float time_in_motion = 0.f;     // seconds since putt started
+    float x = 0.f, y = 0.f;        // ball pixel position this frame
+};
+
 struct PuttData {
     int      putt_number    = 0;
     PuttState state         = PuttState::IDLE;
@@ -29,6 +37,7 @@ struct PuttData {
     float time_in_motion    = 0.f;   // seconds
 
     float start_x = 0.f, start_y = 0.f;
+    float peak_speed_x = 0.f, peak_speed_y = 0.f;
     float final_x = 0.f, final_y = 0.f;
 
     const char* state_str() const {
@@ -43,9 +52,15 @@ struct PuttData {
 
 class PuttStats {
 public:
-    explicit PuttStats(float motion_threshold = 5.f, int stop_frames = 15);
+    /// @param motion_threshold  Speed (in/s) above which ball is "in motion"
+    /// @param stop_frames       Consecutive low-speed frames to transition IN_MOTION -> STOPPED
+    /// @param max_motion_sec    Max seconds in IN_MOTION before forcing STOPPED (handles stuck/noisy tracker)
+    explicit PuttStats(float motion_threshold = 5.f, int stop_frames = 15, float max_motion_sec = 15.f);
 
-    void update(const TrackedObject& ball, double dt);
+    void update(const TrackedObject& ball, double dt, float ppi = 1.0f);
+
+    /// Call when ball is lost (not detected). Transitions IN_MOTION -> STOPPED so UE can show result and fade.
+    void on_ball_lost();
 
     PuttData current() const;
     std::vector<PuttData> history() const;
@@ -63,10 +78,14 @@ public:
 private:
     float motion_threshold_;
     int   stop_frames_required_;
+    float max_motion_sec_;
 
     mutable std::mutex mu_;
     PuttData current_;
     std::vector<PuttData> history_;
+
+    /** Per-frame samples for current putt; we derive peak speed (max), total distance (last), launch speed (first) when putt completes. */
+    std::vector<PuttFrameSample> frame_samples_;
 
     int   frames_below_threshold_ = 0;
     float prev_x_ = 0.f, prev_y_ = 0.f;

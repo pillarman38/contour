@@ -1,0 +1,143 @@
+:host {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.green-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  max-width: 100%;
+  min-height: 100dvh;
+  padding: 0.5rem;
+  box-sizing: border-box;
+  flex: 1;
+  min-height: 0;
+}
+
+.status {
+  margin: 0.5rem 0;
+  font-size: 0.9rem;
+  color: #666;
+}
+
+.status .username {
+  color: #333;
+  font-weight: 500;
+}
+
+.picker-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.picker-panel {
+  background: #fff;
+  border-radius: 8px;
+  padding: 1rem 1.5rem;
+  min-width: 240px;
+  max-width: 90vw;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+}
+
+.picker-title {
+  margin: 0 0 1rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #333;
+}
+
+.picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.picker-option {
+  padding: 0.6rem 1rem;
+  font-size: 1rem;
+  text-align: left;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.picker-option:hover {
+  background: #f0f0f0;
+}
+
+.picker-option-other {
+  font-style: italic;
+  color: #666;
+}
+
+.picker-cancel {
+  margin-top: 1rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  color: #666;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.picker-cancel:hover {
+  color: #333;
+}
+
+.green-svg {
+  width: 100%;
+  max-width: min(95vw, 1400px);
+  flex: 1;
+  min-height: 0;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.hole-hit {
+  cursor: pointer;
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.hole-hit circle:first-child {
+  cursor: pointer;
+}
+
+.ball-hit {
+  cursor: pointer;
+}
+
+.ball-hit circle:first-child {
+  cursor: pointer;
+}
+
+.ball-username {
+  font-size: 10px;
+  fill: #fff;
+  paint-order: stroke;
+  stroke: #333;
+  stroke-width: 2px;
+  pointer-events: none;
+}
+
+@media (max-width: 480px) {
+  .green-container {
+    padding: 0.25rem;
+  }
+
+  .green-svg {
+    max-height: 70dvh;
+  }
+}

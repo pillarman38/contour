@@ -1,0 +1,13 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.7",
+	"Category": "",
+	"Description": "Golf putting simulator with UDP-driven ball tracking",
+	"Modules": [
+		{
+			"Name": "GolfSimUE",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

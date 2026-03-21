@@ -1,0 +1,121 @@
+<div class="green-container">
+  @if (pickerHoleIndex() >= 0) {
+    <div class="picker-overlay" (click)="cancelPicker()">
+      <div class="picker-panel" (click)="$event.stopPropagation()">
+        <h3 class="picker-title">Who is selecting the target hole?</h3>
+        <div class="picker-list">
+          @for (u of usernames(); track u) {
+            <button type="button" class="picker-option" (click)="onUsernameSelected(u)">
+              {{ u }}
+            </button>
+          }
+          <button type="button" class="picker-option picker-option-other" (click)="onEnterOtherUsername()">
+            Enter name...
+          </button>
+        </div>
+        <button type="button" class="picker-cancel" (click)="cancelPicker()">Cancel</button>
+      </div>
+    </div>
+  }
+  @if (!data()) {
+    <p class="status">Connecting to tracker...</p>
+  } @else {
+    <p class="status">
+      Tap a ball to enter your username. Tap a hole to select target (any user, any machine).
+      @if (username()) {
+        <span class="username">({{ username() }})</span>
+      }
+    </p>
+    <svg
+      class="green-svg"
+      [attr.viewBox]="'0 0 ' + data()!.frameWidth + ' ' + data()!.frameHeight"
+      [style.aspect-ratio]="data()!.frameWidth + ' / ' + data()!.frameHeight"
+      preserveAspectRatio="xMidYMid meet"
+    >
+      <!-- Green surface -->
+      <rect
+        x="0"
+        y="0"
+        [attr.width]="data()!.frameWidth"
+        [attr.height]="data()!.frameHeight"
+        fill="#2d5a27"
+      />
+      <!-- User aim lines (ball to target hole) -->
+      @for (b of ballsWithTarget(); track b.index) {
+        <line
+          [attr.x1]="b.x"
+          [attr.y1]="b.y"
+          [attr.x2]="holes()[b.target_hole_index!].x"
+          [attr.y2]="holes()[b.target_hole_index!].y"
+          [attr.stroke]="getUserColor(b.username!)"
+          stroke-width="3"
+          stroke-opacity="0.9"
+          stroke-linecap="round"
+        />
+      }
+      <!-- Holes (min 44px touch target) -->
+      @for (hole of holes(); track $index) {
+        <g (click)="onHoleClick($index)" class="hole-hit">
+          <circle
+            [attr.cx]="hole.x"
+            [attr.cy]="hole.y"
+            [attr.r]="holeRadius(hole.radius)"
+            fill="transparent"
+          />
+          <circle
+            [attr.cx]="hole.x"
+            [attr.cy]="hole.y"
+            [attr.r]="hole.radius"
+            fill="#0d0d0d"
+            stroke="#333"
+            stroke-width="2"
+          />
+        </g>
+      }
+      <!-- Balls (multi-ball mode: clickable to claim) -->
+      @for (b of balls(); track b.index) {
+        @if (b.visible) {
+          <g
+            (click)="onBallClick(b.index)"
+            class="ball-hit"
+            [attr.data-index]="b.index"
+          >
+            <circle
+              [attr.cx]="b.x"
+              [attr.cy]="b.y"
+              r="20"
+              fill="transparent"
+            />
+            <circle
+              [attr.cx]="b.x"
+              [attr.cy]="b.y"
+              r="8"
+              fill="#fff"
+              stroke="#333"
+              stroke-width="1"
+            />
+            @if (b.username) {
+              <text
+                [attr.x]="b.x"
+                [attr.y]="b.y - 20"
+                text-anchor="middle"
+                class="ball-username"
+              >{{ b.username }}</text>
+            }
+          </g>
+        }
+      }
+      <!-- Legacy single ball when no balls in array -->
+      @if (balls().length === 0 && ballPos()) {
+        <circle
+          [attr.cx]="ballPos()!.x"
+          [attr.cy]="ballPos()!.y"
+          r="14"
+          fill="#fff"
+          stroke="#333"
+          stroke-width="1"
+        />
+      }
+    </svg>
+  }
+</div>

@@ -12,7 +12,7 @@ namespace golf {
 
 /// Represents a single detection from the network output.
 struct Detection {
-    int class_id;           // 0 = golf_ball, 1 = putter
+    int class_id;           // 0 = golf_ball, 1 = putter, 2 = hole
     float confidence;
     float x1, y1, x2, y2;  // bounding box (pixel coords in original frame)
 
