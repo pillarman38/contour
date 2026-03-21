@@ -1,0 +1,39 @@
+What putting stats do golfers typically like to look at when they are away from the course?
+When golfers are away from the course, they typically look at metrics that reveal long-term trends and highlight specific areas for practice. Modern apps like Arccos and ShotScope have shifted the focus from simple counts to contextual performance data. 
+Reddit
+Reddit
+ +1
+Core Performance Metrics
+Strokes Gained (SG): Putting: This is widely considered the most accurate measure of putting prowess. It compares a golfer's performance from specific distances against a benchmark (like a PGA Tour pro or a scratch golfer), showing exactly how many strokes they gained or lost on the greens.
+Three-Putt Frequency: A high-impact stat for amateurs, as three-putting is essentially "throwing away strokes". Golfers track this to identify if they need to work on lag putting and speed control.
+Putts Per Green in Regulation (GIR): This is more telling than "Total Putts" because it isolates putting from chipping. If a golfer misses a green and chips it to two feet, a one-putt doesn't necessarily mean they are putting well—it means they chipped well. 
+Reddit
+Reddit
+ +7
+Distance-Based Statistics
+Golfers analyze their "make percentages" from various ranges to manage expectations and set practice goals: 
+Foy Golf Academy
+Foy Golf Academy
+Inside 6 Feet: This is the "must-make" zone where amateurs lose the most strokes relative to pros.
+6 to 12 Feet: Often called the "sweet spot" that separates skill levels; improvements here drop scores faster than almost any other range.
+Lag Putting (30+ Feet): The goal here is usually 3-putt avoidance rather than making the putt. 
+worldwide.golf
+worldwide.golf
+ +3
+Comparisons: Pros vs. Amateurs
+Golfers often use these benchmarks to put their own performance into perspective: 
+Distance 	PGA Tour Make %	Scratch Golfer Make %	20-Handicap Make %
+3 Feet	~99%	~97%	~80%
+5 Feet	~77-91%	~80%	~50%
+8 Feet	~50%	~43%	~38%
+10 Feet	~40%	~45%	~20%
+Technical Swing Data
+For those with home setups like Foresight Sports launch monitors, technical "away-from-course" data includes: 
+Foresight Sports
+Foresight Sports
+Face Angle at Impact: The primary factor in start line accuracy.
+Tempo: The ratio of backstroke time to forward stroke time (ideally 2.0:1).
+Skid vs. True Roll: Measuring how quickly the ball stops sliding and starts a pure end-over-end roll. 
+Foresight Sports
+Foresight Sports
+ +1
