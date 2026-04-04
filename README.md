@@ -1,17 +1,40 @@
-# Golf Sim -- Ball & Putter Detection Pipeline
+# Golf Sim — Real-Time Putting Green Tracker & Simulator
 
-Real-time golf ball and putter detection on a putting green, designed to feed
-tracking data into Unreal Engine for a golf simulator.
+Real-time golf ball and putter detection on a putting green, feeding
+tracking data into an Angular dashboard and an Unreal Engine 5.7
+visualiser over REST and UDP.
 
 ## Architecture
 
 ```
-┌──────────────┐    ┌──────────────┐    ┌──────────────────────────┐
-│  Python       │    │  Bash Script │    │  C++ Inference Pipeline  │
-│  (YOLOv10)    │───>│  ONNX→TRT    │───>│  TensorRT + OpenCV       │
-│  Train/Export │    │  Conversion  │    │  Track → UDP → Unreal    │
-└──────────────┘    └──────────────┘    └──────────────────────────┘
+Camera
+  │
+  ▼
+┌─────────────────────────────────────────┐
+│  C++ Pipeline  (TensorRT + OpenCV)      │
+│  Detect → Track → PuttStats → StatsApi  │
+└───────────┬──────────────┬──────────────┘
+            │ UDP (JSON)   │ REST API (:8080)
+            ▼              ▼
+  ┌──────────────┐   ┌─────────────────────────────┐
+  │  Unreal 5.7  │   │  Angular 21 (contour/)      │
+  │  3D putting  │   │  Top-down overlay, ball      │
+  │  visualiser  │   │  claiming, hole selection,   │
+  │              │   │  putt stats dashboard        │
+  └──────────────┘   └─────────────────────────────┘
 ```
+
+### Data flow
+
+1. **C++ tracker** runs TensorRT inference on each camera frame, detecting
+   balls (class 0), putters (class 1), and holes (class 2).
+2. An EMA tracker smooths positions, computes velocities, detects made putts,
+   and protects ball tracks from putter occlusion.
+3. **REST API** (`GET /api/tracking`, `POST /api/claim-ball`,
+   `POST /api/target-hole`, etc.) exposes tracking state + putt stats to the
+   Angular dashboard.
+4. **UDP JSON datagrams** stream to Unreal Engine every frame with positions,
+   per-ball target holes, putt stats, and ball-placement hints.
 
 ---
 
@@ -20,9 +43,11 @@ tracking data into Unreal Engine for a golf simulator.
 - **NVIDIA GPU** with CUDA support
 - **CUDA Toolkit** >= 11.8
 - **TensorRT** >= 8.6
-- **OpenCV** >= 4.8 (with C++ and Python)
+- **OpenCV** >= 4.8 (C++ and Python)
 - **CMake** >= 3.18
 - **Python** >= 3.10
+- **Node.js** >= 18 (for the Angular dashboard)
+- **Unreal Engine** 5.7 (for the 3D visualiser)
 - **ffmpeg** (for frame capture)
 
 ---
@@ -36,376 +61,252 @@ conda activate golf-sim
 
 # 2. Install Python dependencies
 pip install -r requirements.txt
+
+# 3. Install Angular dashboard dependencies
+cd contour && npm install && cd ..
 ```
 
 ---
 
-## Workflow Overview
+## Project Structure
 
-The full pipeline from data collection to real-time inference:
-
-| Step | Script | Description |
-|------|--------|-------------|
-| 1 | `scripts/capture_frames.sh` | Capture frames from camera |
-| 2 | `python/auto_label.py` | Auto-label images with GroundingDINO |
-| 3 | `python/import_to_label_studio.py` | Review and correct labels in Label Studio |
-| 4 | `python/split_dataset.py` | Split data into train/val sets |
-| 5 | `python/detect_golf_ball.py train` | Train YOLOv10 model |
-| 6 | `python/detect_golf_ball.py export` | Export trained model to ONNX |
-| 7 | `scripts/convert_onnx_to_trt.sh` | Convert ONNX to TensorRT engine |
-| 8 | C++ `golf_sim` executable | Real-time inference and tracking |
-
----
-
-## Commands Reference
-
-### 1. Capture Frames from Camera
-
-Captures every Nth frame from a camera or video using ffmpeg. Includes a
-5-second countdown before capture begins. New captures never overwrite
-existing frames.
-
-```bash
-# Capture from webcam at 1080p@120fps, every 3rd frame, for 15 seconds
-./scripts/capture_frames.sh \
-    --source /dev/video0 \
-    --fps 120 \
-    --resolution 1920x1080 \
-    --every 3 \
-    --duration 15
-
-# Capture from a video file, every 5th frame
-./scripts/capture_frames.sh \
-    --source recording.mp4 \
-    --every 5 \
-    --output data/images/val
+```
+golf-sim/
+├── README.md
+├── requirements.txt
+├── configs/
+│   └── golf_ball_dataset.yaml         # YOLO dataset config
+├── scripts/
+│   ├── capture_frames.sh              # Frame capture from camera
+│   ├── clear_training_data.sh         # Remove all training data
+│   └── convert_onnx_to_trt.sh        # ONNX → TensorRT conversion
+├── python/
+│   ├── detect_golf_ball.py            # Train, detect, and export YOLOv10
+│   ├── auto_label.py                  # Auto-label with GroundingDINO
+│   ├── import_to_label_studio.py      # Label Studio import/export
+│   └── split_dataset.py              # Train/val dataset splitter
+├── cpp/                               # C++ real-time pipeline
+│   ├── CMakeLists.txt
+│   ├── include/
+│   │   ├── trt_engine.h              # TensorRT engine wrapper
+│   │   ├── frame_pipeline.h          # OpenCV frame processing
+│   │   ├── tracker.h                 # EMA object tracker (multi-ball, multi-putter)
+│   │   ├── putt_stats.h              # Per-putt state machine & stats
+│   │   ├── stats_api.h               # REST API server (httplib)
+│   │   └── unreal_sender.h           # UDP sender for Unreal Engine
+│   └── src/
+│       ├── main.cpp                  # Entry point & main loop
+│       ├── trt_engine.cpp
+│       ├── frame_pipeline.cpp
+│       ├── tracker.cpp
+│       ├── putt_stats.cpp
+│       ├── stats_api.cpp
+│       └── unreal_sender.cpp
+├── contour/                           # Angular 21 dashboard
+│   ├── package.json
+│   ├── server.js                     # Express proxy (serves Angular + proxies API)
+│   └── src/app/
+│       ├── components/
+│       │   ├── green-view/           # Top-down green overlay (SVG)
+│       │   ├── games/                # Games / mini-game view
+│       │   └── layout/               # App layout shell
+│       └── services/
+│           └── tracking.service.ts   # REST polling, ball claiming, hole selection
+├── ue/GolfSimUE/                      # Unreal Engine 5.7 project
+│   ├── GolfSimUE.uproject
+│   └── Source/GolfSimUE/
+│       ├── UDPGolfReceiver.h/cpp     # UDP listener, JSON parsing, pixel→world mapping
+│       ├── BallToHoleLineActor.h/cpp # Spline-mesh aim line (ball → hole)
+│       ├── BallTrailSplineActor.h/cpp# Ball trail visualisation
+│       └── PuttMarkerActor.h/cpp     # Ball placement marker
+├── data/
+│   ├── images/{train,val}/           # Image data
+│   └── labels/{train,val}/           # YOLO label files
+└── models/                            # ONNX and TensorRT engines
 ```
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--source PATH` | `/dev/video0` | Camera device or video file |
-| `--fps N` | `120` | Camera capture framerate |
-| `--resolution WxH` | `1920x1080` | Capture resolution |
-| `--every N` | `3` | Keep every Nth frame (3-5 recommended) |
-| `--output DIR` | `data/images/train` | Output directory |
-| `--prefix NAME` | `frame` | Filename prefix |
-| `--format EXT` | `png` | Image format (`png` or `jpg`) |
-| `--duration SECS` | `15` | Stop after N seconds |
-
 ---
 
-### 2. Auto-Label Images
+## Components
 
-Uses GroundingDINO (zero-shot detection) to automatically generate YOLO-format
-bounding box labels for golf balls and putters.
+### C++ Pipeline (`cpp/`)
 
-```bash
-cd python
+The core of the system. Runs TensorRT inference on camera frames, tracks
+objects, computes putt statistics, and fans out data via REST and UDP.
 
-# Auto-label training images
-python auto_label.py \
-    --images ../data/images/train \
-    --labels ../data/labels/train
+#### Key classes
 
-# With higher confidence threshold and overwrite existing labels
-python auto_label.py \
-    --images ../data/images/train \
-    --labels ../data/labels/train \
-    --conf 0.4 \
-    --overwrite
-```
+| Class | File | Purpose |
+|-------|------|---------|
+| `TrtEngine` | `trt_engine.h/cpp` | Loads a TensorRT `.engine` file and runs inference |
+| `FramePipeline` | `frame_pipeline.h/cpp` | Camera capture, pre-processing, NMS |
+| `Tracker` | `tracker.h/cpp` | Multi-ball / multi-putter EMA tracker with stable IDs, putter-occlusion protection, and made-putt detection |
+| `PuttStats` | `putt_stats.h/cpp` | Per-putt state machine (idle → in_motion → stopped) with speed, distance, break |
+| `StatsApi` | `stats_api.h/cpp` | REST API on port 8080 — serves tracking data and accepts ball claims / hole selections |
+| `UnrealSender` | `unreal_sender.h/cpp` | Sends JSON over UDP to Unreal Engine every frame |
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--images DIR` | `../data/images/train` | Directory of images to label |
-| `--labels DIR` | `../data/labels/train` | Output directory for YOLO `.txt` labels |
-| `--conf FLOAT` | `0.3` | Detection confidence threshold |
-| `--overwrite` | off | Overwrite existing label files |
-
----
-
-### 3. Review Labels in Label Studio
-
-Imports images and auto-generated labels into Label Studio for manual review
-and correction. Can also export corrected labels back to YOLO format.
-
-```bash
-# Start Label Studio (run in a separate terminal)
-label-studio start
-
-cd python
-
-# Import images and pre-annotations (creates a new project)
-python import_to_label_studio.py \
-    --images ../data/images/train \
-    --labels ../data/labels/train \
-    --email connorwoodford@yahoo.com \
-    --password 'Goodkid38!!**()'
-
-# Re-import into an EXISTING project (clears old tasks, re-uploads everything)
-# Use this when training data has been updated -- no need to delete the project
-python import_to_label_studio.py \
-    --project-id 8 \
-    --images ../data/images/train \
-    --labels ../data/labels/train \
-    --email your@email.com \
-    --password yourpassword
-
-# Export corrected labels back to YOLO format
-python import_to_label_studio.py \
-    --export \
-    --project-id 8 \
-    --email your@email.com \
-    --password yourpassword \
-    --output ../data/labels/train
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--images DIR` | `../data/images/train` | Image directory to import |
-| `--labels DIR` | `../data/labels/train` | YOLO label directory for pre-annotations |
-| `--ls-url URL` | `http://localhost:8080` | Label Studio URL |
-| `--email EMAIL` | *required* | Label Studio account email |
-| `--password PASS` | *required* | Label Studio account password |
-| `--project-name NAME` | `Golf Ball Detection` | Project name (only when creating new) |
-| `--project-id ID` | -- | Reuse existing project (import) or export from (export) |
-| `--export` | off | Switch to export mode |
-| `--output DIR` | `../data/labels/train` | Output dir for exported labels |
-
----
-
-### 4. Split Dataset
-
-Splits the dataset into training and validation sets using temporal-chunk
-shuffling to avoid near-duplicate frames crossing the split boundary.
-
-```bash
-cd python
-
-# Default 80/20 split
-python split_dataset.py
-
-# 90/10 split
-python split_dataset.py --val-ratio 0.1
-
-# Preview what would be moved without actually moving
-python split_dataset.py --dry-run
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--train-images DIR` | `../data/images/train` | Training images directory |
-| `--val-images DIR` | `../data/images/val` | Validation images directory |
-| `--train-labels DIR` | `../data/labels/train` | Training labels directory |
-| `--val-labels DIR` | `../data/labels/val` | Validation labels directory |
-| `--val-ratio FLOAT` | `0.2` | Fraction reserved for validation |
-| `--chunk-size N` | `5` | Consecutive frames kept together |
-| `--seed N` | `42` | Random seed for reproducibility |
-| `--dry-run` | off | Preview changes without moving files |
-
----
-
-### 5. Train YOLOv10 Model
-
-Trains a YOLOv10 model on the labeled dataset.
-
-```bash
-cd python
-
-python detect_golf_ball.py train \
-    --data ../configs/golf_ball_dataset.yaml \
-    --weights yolov10n.pt \
-    --epochs 100 \
-    --batch 8
-```
-
-Defaults: `--img-size 1280` (better for small objects like golf balls), `cache=True`. If you hit OOM, use `--img-size 640 --batch 16 --no-cache`.
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--data PATH` | *required* | Path to dataset YAML config |
-| `--weights PATH` | `yolov10n.pt` | Base model weights |
-| `--epochs N` | `100` | Number of training epochs |
-| `--img-size N` | `1280` | Input size (640 if OOM) |
-| `--batch N` | `16` | Batch size (reduce to 4–8 for imgsz 1280) |
-| `--no-cache` | off | Disable image caching |
-
----
-
-### 6. Run Inference (Test)
-
-Run the trained model on images, video, or a live camera feed.
-
-```bash
-cd python
-
-python detect_golf_ball.py detect \
-    --source path/to/video.mp4 \
-    --weights runs/train/golf_ball_detector/weights/best.pt \
-    --conf 0.5 \
-    --show
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--source PATH` | *required* | Image, video, or camera index |
-| `--weights PATH` | *required* | Trained model weights |
-| `--img-size N` | `640` | Input image size |
-| `--conf FLOAT` | `0.5` | Confidence threshold |
-| `--show` | off | Display results in a window |
-
----
-
-### 7. Export to ONNX
-
-Export the trained PyTorch model to ONNX format for TensorRT conversion.
-
-```bash
-cd python
-
-python detect_golf_ball.py export \
-    --weights runs/train/golf_ball_detector/weights/best.pt \
-    --img-size 640
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--weights PATH` | *required* | Trained `.pt` weights file |
-| `--img-size N` | `640` | Input image size |
-
----
-
-### 8. Convert ONNX to TensorRT
-
-Converts an ONNX model to an optimized TensorRT engine using `trtexec`.
-
-```bash
-# FP16 conversion (recommended -- good balance of speed and accuracy)
-./scripts/convert_onnx_to_trt.sh models/best.onnx models/golf.engine --fp16
-
-# FP32 (higher precision, slower)
-./scripts/convert_onnx_to_trt.sh models/best.onnx models/golf.engine --fp32
-
-# INT8 (fastest, requires calibration cache)
-./scripts/convert_onnx_to_trt.sh models/best.onnx models/golf.engine \
-    --int8 --calib-cache models/calib.cache
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `<input.onnx>` | *required* | Input ONNX model file |
-| `[output.engine]` | auto | Output engine path (defaults to `.engine` extension) |
-| `--fp16` | default | Use FP16 precision |
-| `--fp32` | -- | Use FP32 precision |
-| `--int8` | -- | Use INT8 precision |
-| `--calib-cache FILE` | -- | INT8 calibration cache |
-| `--workspace MB` | `4096` | GPU workspace size (MiB) |
-| `--batch-size N` | `1` | Max batch size |
-| `--input-name NAME` | `images` | ONNX input tensor name |
-| `--input-shape SHAPE` | `1x3x640x640` | Input shape |
-| `--verbose` | off | Verbose logging |
-
----
-
-### 9. C++ Real-Time Inference
-
-Build and run the C++ inference pipeline that loads the TensorRT engine,
-processes camera frames, tracks objects, and sends results to Unreal Engine
-over UDP.
-
-#### Build
+#### Build & run
 
 ```bash
 cd cpp
 mkdir build && cd build
+
+# Linux
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
 
-# If TensorRT is in a non-standard location:
-cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DCUDA_TOOLKIT_ROOT_DIR="C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1" -DOpenCV_DIR="C:/Users/conno/Downloads/opencv/build/x64/vc16/lib"
+# Windows (Visual Studio)
+cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release \
+  -DCUDA_TOOLKIT_ROOT_DIR="C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1" \
+  -DOpenCV_DIR="C:/path/to/opencv/build/x64/vc16/lib"
 ```
 
-#### Run
-
 ```bash
-# Webcam with GUI preview
-./golf_sim --engine /home/connorwoodford/Desktop/projects/golf-sim/python/runs/detect/runs/train/golf_ball_detector/weights/best.engine --source 0
+# Run with webcam
+./golf_sim --engine path/to/model.engine --source 0
 
-# Video file with custom Unreal Engine endpoint
-./golf_sim --engine /home/connorwoodford/Desktop/projects/golf-sim/python/runs/detect/runs/train/golf_ball_detector/weights/best.engine \
-           --source ../../data/test_video.mp4 \
-           --host 192.168.1.100 --port 7001
-
-# Headless mode (no preview window)
-./golf_sim --engine /home/connorwoodford/Desktop/projects/golf-sim/python/runs/detect/runs/train/golf_ball_detector/weights/best.engine --source 0 --no-gui
+# Run with video, custom UE endpoint, headless
+./golf_sim --engine path/to/model.engine \
+           --source video.mp4 \
+           --host 192.168.1.100 --port 7001 --no-gui
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--engine PATH` | *required* | Path to TensorRT `.engine` file |
-| `--source SRC` | `0` | Camera index or video file path |
+| `--engine PATH` | *required* | TensorRT `.engine` file |
+| `--source SRC` | `0` | Camera index or video file |
 | `--host HOST` | `127.0.0.1` | Unreal Engine UDP host |
 | `--port PORT` | `7001` | Unreal Engine UDP port |
 | `--conf THRESH` | `0.5` | Detection confidence threshold |
 | `--no-gui` | off | Disable OpenCV preview window |
 
+#### REST API endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/tracking` | Full tracking snapshot (balls, holes, putters, users, frame dimensions) |
+| `GET` | `/api/stats/current` | Current putt data (speed, distance, state) |
+| `GET` | `/api/stats/history` | All completed putts |
+| `GET` | `/api/stats/session` | Session averages |
+| `POST` | `/api/claim-ball` | Claim a ball by stable index (`{ ball_index, username }`) |
+| `POST` | `/api/target-hole` | Set target hole for a user (`{ index, username }`) |
+
 ---
 
-### 10. Clear Training Data
+### Angular Dashboard (`contour/`)
 
-Removes all captured images and labels while keeping the directory structure.
+An Angular 21 single-page app that renders a real-time SVG overlay of the
+putting green. Served by an Express server that proxies REST requests to the
+C++ backend.
+
+#### Features
+
+- **Top-down green view** — balls, holes, and putters drawn over the camera frame
+- **Ball claiming** — tap an unclaimed ball → pick a username
+- **Hole selection** — putter hover over ball to select it, then hover over a hole
+- **Ball-vanish selection** — if a putter occludes a ball, it auto-selects
+- **Aim lines** — per-user coloured lines from ball to target hole
+- **Putt stats** — live speed, distance, and break for each ball
+- **Placement markers** — shows where to place a ball after a made putt
+- **Multi-putter support** — any number of simultaneous putters
+
+#### Run
 
 ```bash
-# Interactive (asks for confirmation)
-bash scripts/clear_training_data.sh
-
-# Skip confirmation
-bash scripts/clear_training_data.sh --force
-
-# to rebuild the project in unreal run and make sure unreal is closed and all epic/unreal processes are killed
-& "C:\Program Files\Epic Games\UE_5.7\Engine\Build\BatchFiles\Build.bat" GolfSimUEEditor Win64 Development -Project="C:\Users\conno\Desktop\projects\golf-sim\ue\GolfSimUE\GolfSimUE.uproject"     
-
+cd contour
+npm run build     # one-time Angular build
+npm start         # Express server on port 4200 (proxies API to localhost:8080)
 ```
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--force` | off | Skip confirmation prompt |
+Open `http://localhost:4200` in a browser.
 
 ---
 
-## Unreal Engine Integration
+### Unreal Engine Visualiser (`ue/GolfSimUE/`)
 
-The C++ pipeline sends JSON datagrams over UDP on every frame:
+Receives UDP JSON datagrams from the C++ pipeline and drives actors in a 3D
+putting green scene. See [`ue/GolfSimUE/README.md`](ue/GolfSimUE/README.md)
+for full setup instructions.
+
+#### Key actors
+
+| Actor | Purpose |
+|-------|---------|
+| `AUDPGolfReceiver` | Listens on UDP port 7001, parses JSON, maps pixel → world coordinates, drives ball/putter/hole actors |
+| `ABallToHoleLineActor` | Spline mesh from ball to target hole that follows the green surface |
+| `ABallTrailSplineActor` | Visualises the ball's path during a putt |
+| `APuttMarkerActor` | Ball placement indicator |
+| `BP_PlacementMarkerManager` | Blueprint actor that manages a pool of placement markers |
+
+#### UDP payload (sent every frame)
 
 ```json
 {
   "timestamp_ms": 1708099200000,
-  "ball": {
-    "x": 320.5, "y": 240.1,
-    "vx": 15.2, "vy": -8.7,
-    "conf": 0.95,
-    "visible": true
-  },
-  "putter": {
-    "x": 310.0, "y": 260.3,
-    "vx": 0.0, "vy": 0.0,
-    "conf": 0.88,
-    "visible": true
-  }
+  "ball": { "x": 320.5, "y": 240.1, "vx": 15.2, "vy": -8.7, "conf": 0.95, "visible": true },
+  "putter": { "x": 310.0, "y": 260.3, "conf": 0.88, "visible": true },
+  "balls": [
+    { "x": 320.5, "y": 240.1, "visible": true, "index": 0, "username": "alice",
+      "target_hole_index": 1, "putt_number": 3, "speed": 12.5, "distance": 45.2, "state": "idle" }
+  ],
+  "holes": [ { "x": 500.0, "y": 400.0, "radius": 18.5, "visible": true } ],
+  "putters": [ { "x": 310.0, "y": 260.3, "visible": true } ],
+  "putt_made": false,
+  "frame_width": 1920,
+  "frame_height": 1080
 }
 ```
 
-In your Unreal project, create a UDP listener on port **7001** and parse the
-incoming JSON to drive your game logic (ball physics, putter position, etc.).
+---
 
-### Ball-to-hole contour line
+## Training Pipeline
 
-The **Ball to Hole Line** actor (`BallToHoleLineActor`) draws a spline mesh
-between the ball and the hole that follows the green surface. Place **Ball to
-Hole Line** in the level, set **Enable Line** to true, then either set **Golf Receiver** to your UDP Golf Receiver or set **Ball Actor** and **Hole Actor** manually. Assign **Line Mesh** (e.g. Engine → Basic Shapes → Plane) so the line is visible; optionally set **Line Material**. (Enable Line is off by default to avoid load-time issues when opening the project.) The actor samples points between ball and hole,
-line-traces down to the green, and builds a spline with mesh segments each frame.
-Ensure the green has **collision** enabled and that **Trace Channel** (e.g. Visibility)
-hits it.
+The model training workflow — from raw camera footage to a TensorRT engine:
+
+| Step | Command | Description |
+|------|---------|-------------|
+| 1 | `scripts/capture_frames.sh` | Capture frames from camera via ffmpeg |
+| 2 | `python/auto_label.py` | Auto-label images with GroundingDINO |
+| 3 | `python/import_to_label_studio.py` | Review / correct labels in Label Studio |
+| 4 | `python/split_dataset.py` | Split into train/val sets |
+| 5 | `python/detect_golf_ball.py train` | Train YOLOv10 model |
+| 6 | `python/detect_golf_ball.py export` | Export to ONNX |
+| 7 | `scripts/convert_onnx_to_trt.sh` | Convert ONNX → TensorRT engine |
+
+### Capture frames
+
+```bash
+./scripts/capture_frames.sh \
+    --source /dev/video0 \
+    --fps 120 --resolution 1920x1080 \
+    --every 3 --duration 15
+```
+
+### Auto-label
+
+```bash
+python python/auto_label.py \
+    --images data/images/train \
+    --labels data/labels/train
+```
+
+### Train
+
+```bash
+python python/detect_golf_ball.py train \
+    --data configs/golf_ball_dataset.yaml \
+    --weights yolov10n.pt \
+    --epochs 100 --batch 8
+```
+
+### Export & convert
+
+```bash
+python python/detect_golf_ball.py export \
+    --weights runs/train/golf_ball_detector/weights/best.pt
+
+./scripts/convert_onnx_to_trt.sh models/best.onnx models/golf.engine --fp16
+```
 
 ---
 
@@ -431,41 +332,37 @@ Each label file has one line per object:
 |----------|------|
 | 0 | golf_ball |
 | 1 | putter |
+| 2 | hole |
 
 ---
 
-## Project Structure
+## Object Detection Classes
 
-```
-golf-sim/
-├── README.md                          # This file
-├── requirements.txt                   # Python dependencies
-├── configs/
-│   └── golf_ball_dataset.yaml        # YOLO dataset config
-├── scripts/
-│   ├── capture_frames.sh            # Frame capture from camera
-│   ├── clear_training_data.sh       # Remove all training data
-│   └── convert_onnx_to_trt.sh       # ONNX to TensorRT conversion
-├── python/
-│   ├── detect_golf_ball.py           # Train, detect, and export YOLOv10
-│   ├── auto_label.py                 # Auto-label with GroundingDINO
-│   ├── import_to_label_studio.py     # Label Studio import/export
-│   └── split_dataset.py             # Train/val dataset splitter
-├── cpp/
-│   ├── CMakeLists.txt               # C++ build system
-│   ├── include/
-│   │   ├── trt_engine.h             # TensorRT engine wrapper
-│   │   ├── frame_pipeline.h         # OpenCV frame processing
-│   │   ├── tracker.h                # EMA object tracker
-│   │   └── unreal_sender.h          # UDP sender for Unreal Engine
-│   └── src/
-│       ├── main.cpp                 # C++ entry point
-│       ├── trt_engine.cpp
-│       ├── frame_pipeline.cpp
-│       ├── tracker.cpp
-│       └── unreal_sender.cpp
-├── data/
-│   ├── images/{train,val}/          # Image data
-│   └── labels/{train,val}/          # YOLO label files
-└── models/                           # ONNX and TensorRT engines
-```
+| ID | Class | Notes |
+|----|-------|-------|
+| 0 | Golf ball | Up to 4 tracked simultaneously with stable IDs |
+| 1 | Putter | Multiple putters supported; best-confidence used for legacy/UE single-putter |
+| 2 | Hole | Up to 8 holes; persisted for 150 frames when not visible |
+
+---
+
+## Interaction Model
+
+The putter-hover interaction flow for the Angular dashboard:
+
+1. **Claim a ball** — tap an unclaimed ball in the UI, pick a username
+2. **Select a ball** — hover any putter over a claimed ball for 4+ frames (yellow ring appears)
+3. **Select a target hole** — with a ball selected, hover the putter near a hole (blue preview ring), then lift the putter (vanish triggers selection)
+4. **Aim line appears** — a coloured line draws from the ball to the selected hole
+5. **Re-select** — hover over another hole and lift to change the target
+6. **Ball-vanish shortcut** — if the putter covers a ball and it disappears from camera view, the ball is auto-selected (putter occlusion protection keeps the ball valid in the tracker)
+
+---
+
+## Tracker Behaviour
+
+- **EMA smoothing** with configurable alpha (default 0.6) for position and velocity
+- **Putter occlusion protection** — when a ball is not detected but a putter is within 60px of its last position, the ball stays valid (prevents aim line flicker / UE actor freeze)
+- **Stable IDs** — balls get persistent IDs that survive brief detection loss; IDs are reserved for claimed balls so they don't get recycled
+- **Made-putt detection** — when the primary ball disappears within 6" of the hole at reasonable speed, a made putt is declared
+- **Hole persistence** — holes remain valid for up to 150 frames after losing detection
