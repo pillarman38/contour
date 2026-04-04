@@ -187,21 +187,12 @@ export class GreenViewComponent implements OnInit, OnDestroy {
     return {idx: bestIdx, d2: bestD2};
   }
 
-  private _udpSizeThrottle = 0;
   private onTrackingUpdate(): void {
     const d = this.data();
     if (!d) return;
     const pts = d.putters;
     const anyVisible = pts.length > 0;
     const selected = this.selectedBallUsername();
-    // #region agent log
-    if (++this._udpSizeThrottle % 30 === 0) {
-      const estBall = 120; const estPerBall = 420; const estPutter = 80; const estPerHole = 60; const estGlobal = 300;
-      const estPerUser = 140; const estPayload = estBall + d.balls.length * estPerBall + estPutter + d.holes.length * estPerHole + d.users.length * estPerUser + estGlobal;
-      const ballTargets = d.balls.map(b => ({idx: b.index, u: b.username, thi: b.target_hole_index}));
-      fetch('http://127.0.0.1:7256/ingest/834a85df-ea0a-4acc-9f99-905708475f27',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'3366b0'},body:JSON.stringify({sessionId:'3366b0',location:'green-view:payload-est',message:'PAYLOAD-EST',data:{estBytes:estPayload,nBalls:d.balls.length,nHoles:d.holes.length,nUsers:d.users.length,ballTargets},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
-    }
-    // #endregion
 
     // Detect vanished putters: only when the putter count actually decreased.
     // Without this guard, a putter moving >100px between frames triggers a false vanish.
@@ -223,9 +214,6 @@ export class GreenViewComponent implements OnInit, OnDestroy {
             const d2 = dx * dx + dy * dy;
             if (d2 < GreenViewComponent.VANISH_HOLE_RADIUS ** 2) {
               const holeIdx = this.currentPreviewHole;
-              // #region agent log
-              fetch('http://127.0.0.1:7256/ingest/834a85df-ea0a-4acc-9f99-905708475f27',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'3366b0'},body:JSON.stringify({sessionId:'3366b0',location:'green-view:hole-select-fire',message:'HOLE-SELECT-FIRED',data:{hole:holeIdx,user:selected,nBalls:d.balls.length,nHoles:d.holes.length,nUsers:d.users.length},timestamp:Date.now(),hypothesisId:'H1+H2'})}).catch(()=>{});
-              // #endregion
               this.holeSelectCooldownUntil = Date.now() + 3000;
               this.selectedBallUsername.set(null);
               this.currentPreviewHole = -1;
@@ -301,9 +289,6 @@ export class GreenViewComponent implements OnInit, OnDestroy {
           if (dx * dx + dy * dy < vanishR2) { putterNearby = true; break; }
         }
         if (putterNearby) {
-          // #region agent log
-          fetch('http://127.0.0.1:7256/ingest/834a85df-ea0a-4acc-9f99-905708475f27',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'3366b0'},body:JSON.stringify({sessionId:'3366b0',location:'green-view:ball-vanish-select',message:'BALL-VANISH-SELECT',data:{user:prev.username,ballIdx:prev.index,lastX:prev.x,lastY:prev.y},timestamp:Date.now(),hypothesisId:'ball-vanish'})}).catch(()=>{});
-          // #endregion
           this.selectedBallUsername.set(prev.username);
           this.putterBallHoverFrames = 0;
           this.putterBallHoverIndex = -1;

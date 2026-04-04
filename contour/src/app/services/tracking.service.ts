@@ -194,9 +194,6 @@ export class TrackingService {
 
   async selectTargetHole(index: number, username: string): Promise<boolean> {
     const sid = await this.ensureSession();
-    // #region agent log
-    const _t0 = Date.now();
-    // #endregion
     try {
       const res = await fetch(`${this.apiBase}/api/target-hole`, {
         method: 'POST',
@@ -207,9 +204,6 @@ export class TrackingService {
         this.currentUsername.set(username);
         this.targetHoleIndex.set(index);
         this.lastPostTime = Date.now();
-        // #region agent log
-        fetch('http://127.0.0.1:7256/ingest/834a85df-ea0a-4acc-9f99-905708475f27',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'3366b0'},body:JSON.stringify({sessionId:'3366b0',location:'tracking.service:selectTargetHole',message:'TARGET-HOLE-POST-OK',data:{hole:index,user:username,latencyMs:Date.now()-_t0},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
-        // #endregion
         try {
           localStorage.setItem(TrackingService.STORAGE_KEY, username);
         } catch {
