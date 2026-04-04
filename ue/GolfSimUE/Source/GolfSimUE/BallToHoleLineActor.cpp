@@ -164,16 +164,33 @@ void ABallToHoleLineActor::Tick(float DeltaTime)
 	AActor* ResolvedBall = BallActor;
 	bool bHasValidHole = IsValidActorRef(HoleActor);
 	AUDPGolfReceiver* ValidReceiver = (IsValidActorRef(GolfReceiver) && GolfReceiver->GetClass()->IsChildOf(AUDPGolfReceiver::StaticClass())) ? GolfReceiver : nullptr;
+	bool bPerBallAim = false;
 	if (ValidReceiver)
 	{
 		if (IsValidActorRef(ValidReceiver->BallActor)) { ResolvedBall = ValidReceiver->BallActor; }
-		// Valid hole: target position or resolved hole actor
 		bHasValidHole = (ValidReceiver->TargetHoleX != 0.f || ValidReceiver->TargetHoleY != 0.f)
 			|| IsValidActorRef(ResolveTargetHole(ValidReceiver));
+		if (ValidReceiver->BallsData.IsValidIndex(AimLineBallSortedIndex))
+		{
+			const FGolfBallInfo& Bi = ValidReceiver->BallsData[AimLineBallSortedIndex];
+			if (Bi.Username.IsEmpty())
+			{
+				SetLineVisibility(false);
+				return;
+			}
+			bPerBallAim = (Bi.TargetHoleX != 0.f || Bi.TargetHoleY != 0.f)
+				|| (Bi.TargetHoleIndex >= 0 && ValidReceiver->HolesData.IsValidIndex(Bi.TargetHoleIndex));
+			if (!bPerBallAim)
+			{
+				SetLineVisibility(false);
+				return;
+			}
+			bHasValidHole = true;
+		}
 	}
 
-	// Reject when ball or hole invalid
-	if (!IsValidActorRef(ResolvedBall) || !bHasValidHole)
+	// Reject when ball or hole invalid (per-ball aim uses tracker pixels — BallActor optional)
+	if (!bHasValidHole || (!bPerBallAim && !IsValidActorRef(ResolvedBall)))
 	{
 		bHasLastBallLocation = false;
 		BothLostElapsedSeconds = 0.f;
@@ -204,8 +221,19 @@ void ABallToHoleLineActor::Tick(float DeltaTime)
 	// BothLost: only when idle/stopped (putt over). During in_motion, TracePersistSeconds controls visibility.
 	if (bAllowUpdate && ValidReceiver && BothLostHideDelaySeconds > 0.f)
 	{
-		const bool bBallNotVisible = !ValidReceiver->BallData.bVisible;
-		const int32 ThIdx = FMath::Clamp(ValidReceiver->TargetHoleIndex, 0, FMath::Max(0, ValidReceiver->HolesData.Num() - 1));
+		const bool bBallNotVisible = (ValidReceiver->BallsData.IsValidIndex(AimLineBallSortedIndex))
+			? !ValidReceiver->BallsData[AimLineBallSortedIndex].Tracked.bVisible
+			: !ValidReceiver->BallData.bVisible;
+		int32 ThIdxForHole = ValidReceiver->TargetHoleIndex;
+		if (ValidReceiver->BallsData.IsValidIndex(AimLineBallSortedIndex))
+		{
+			const int32 Ti = ValidReceiver->BallsData[AimLineBallSortedIndex].TargetHoleIndex;
+			if (Ti >= 0)
+			{
+				ThIdxForHole = Ti;
+			}
+		}
+		const int32 ThIdx = FMath::Clamp(ThIdxForHole, 0, FMath::Max(0, ValidReceiver->HolesData.Num() - 1));
 		const bool bHoleNotVisible = (ValidReceiver->HolesData.Num() == 0)
 			? !ValidReceiver->HoleData.bVisible
 			: !ValidReceiver->HolesData[ThIdx].bVisible;
@@ -249,7 +277,16 @@ void ABallToHoleLineActor::Tick(float DeltaTime)
 		UpdateLine();
 		if (ValidReceiver)
 		{
-			LastBallLocation = ResolvedBall->GetActorLocation();
+			if (bPerBallAim && ValidReceiver->BallsData.IsValidIndex(AimLineBallSortedIndex)
+				&& ValidReceiver->BallsData[AimLineBallSortedIndex].Tracked.bVisible)
+			{
+				const FGolfTrackedObject& Tr = ValidReceiver->BallsData[AimLineBallSortedIndex].Tracked;
+				LastBallLocation = ValidReceiver->PixelToWorld(Tr.X, Tr.Y);
+			}
+			else if (IsValidActorRef(ResolvedBall))
+			{
+				LastBallLocation = ResolvedBall->GetActorLocation();
+			}
 			bHasLastBallLocation = true;
 		}
 		return;
@@ -306,31 +343,60 @@ void ABallToHoleLineActor::UpdateLine()
 	AActor* ResolvedBall = BallActor;
 	FVector HoleLoc = FVector::ZeroVector;
 	bool bHasHoleLoc = false;
+	bool bUsePerBallAim = false;
+	FVector PerBallBallLoc = FVector::ZeroVector;
+
 	AUDPGolfReceiver* ValidReceiver = (IsValidActorRef(GolfReceiver) && GolfReceiver->GetClass()->IsChildOf(AUDPGolfReceiver::StaticClass())) ? GolfReceiver : nullptr;
-	if (ValidReceiver)
+
+	if (ValidReceiver && ValidReceiver->BallsData.IsValidIndex(AimLineBallSortedIndex))
 	{
-		if (IsValidActorRef(ValidReceiver->BallActor)) { ResolvedBall = ValidReceiver->BallActor; }
-		// Use target position directly when available (stable; avoids flicker from hole actor interpolation)
-		const float TX = ValidReceiver->TargetHoleX;
-		const float TY = ValidReceiver->TargetHoleY;
-		if (TX != 0.f || TY != 0.f)
+		const FGolfBallInfo& Bi = ValidReceiver->BallsData[AimLineBallSortedIndex];
+		if (Bi.Tracked.bVisible)
 		{
-			HoleLoc = ValidReceiver->PixelToWorld(TX, TY);
-			bHasHoleLoc = true;
-		}
-	}
-	if (!bHasHoleLoc)
-	{
-		AActor* ResolvedHole = ResolveTargetHole(ValidReceiver);
-		if (!IsValidActorRef(ResolvedHole)) { ResolvedHole = HoleActor; }
-		if (IsValidActorRef(ResolvedHole))
-		{
-			HoleLoc = ResolvedHole->GetActorLocation();
-			bHasHoleLoc = true;
+			PerBallBallLoc = ValidReceiver->PixelToWorld(Bi.Tracked.X, Bi.Tracked.Y);
+			if (Bi.TargetHoleX != 0.f || Bi.TargetHoleY != 0.f)
+			{
+				HoleLoc = ValidReceiver->PixelToWorld(Bi.TargetHoleX, Bi.TargetHoleY);
+				bHasHoleLoc = true;
+				bUsePerBallAim = true;
+			}
+			else if (Bi.TargetHoleIndex >= 0 && ValidReceiver->HolesData.IsValidIndex(Bi.TargetHoleIndex))
+			{
+				const FGolfHoleInfo& H = ValidReceiver->HolesData[Bi.TargetHoleIndex];
+				HoleLoc = ValidReceiver->PixelToWorld(H.X, H.Y);
+				bHasHoleLoc = true;
+				bUsePerBallAim = true;
+			}
 		}
 	}
 
-	if (!IsValidActorRef(ResolvedBall) || !bHasHoleLoc)
+	if (!bUsePerBallAim)
+	{
+		if (ValidReceiver)
+		{
+			if (IsValidActorRef(ValidReceiver->BallActor)) { ResolvedBall = ValidReceiver->BallActor; }
+			const float TX = ValidReceiver->TargetHoleX;
+			const float TY = ValidReceiver->TargetHoleY;
+			if (TX != 0.f || TY != 0.f)
+			{
+				HoleLoc = ValidReceiver->PixelToWorld(TX, TY);
+				bHasHoleLoc = true;
+			}
+		}
+		if (!bHasHoleLoc)
+		{
+			AActor* ResolvedHole = ResolveTargetHole(ValidReceiver);
+			if (!IsValidActorRef(ResolvedHole)) { ResolvedHole = HoleActor; }
+			if (IsValidActorRef(ResolvedHole))
+			{
+				HoleLoc = ResolvedHole->GetActorLocation();
+				bHasHoleLoc = true;
+			}
+		}
+	}
+
+	const bool bBallOk = bUsePerBallAim || IsValidActorRef(ResolvedBall);
+	if (!bBallOk || !bHasHoleLoc)
 	{
 		SplineComponent->ClearSplinePoints();
 		if (DistanceTextComponent) { DistanceTextComponent->SetVisibility(false); }
@@ -340,7 +406,7 @@ void ABallToHoleLineActor::UpdateLine()
 	UWorld* World = GetWorld();
 	if (!World) return;
 
-	const FVector BallLoc = ResolvedBall->GetActorLocation();
+	const FVector BallLoc = bUsePerBallAim ? PerBallBallLoc : ResolvedBall->GetActorLocation();
 
 	// ── Straight line mesh between ball and hole ────────────────────────
 	if (LineMeshComponent)

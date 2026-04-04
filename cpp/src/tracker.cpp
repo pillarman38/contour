@@ -14,7 +14,9 @@ static constexpr int kPutterClassId = 1;
 static constexpr size_t kMaxHoles = 8;
 static constexpr size_t kMaxBalls = 4;
 static constexpr float kHoleMatchDistPx = 80.f;   // detection within this dist = same hole
-static constexpr float kBallMatchDistPx = 60.f;    // detection within this dist = same ball
+static constexpr float kBallMatchDistPx = 60.f;    // base match radius (px) for stationary / slow ball
+static constexpr float kBallMatchSpeedScale = 6.f;   // extra radius += speed_px_per_s * dt * this (fast putts)
+static constexpr float kBallMatchMaxPx = 450.f;    // cap so distant false detections do not steal tracks
 static constexpr int kHoleMaxLostFrames = 150;     // keep hole this long when not seen
 
 Tracker::Tracker(float alpha, int max_lost)
@@ -29,15 +31,19 @@ void Tracker::update(const std::vector<Detection>& detections, double dt) {
     const Detection* best_putter = nullptr;
     float best_putter_conf = 0.f;
 
-    // Collect all ball and hole detections
+    // Collect all ball, putter, and hole detections
     std::vector<const Detection*> ball_dets;
+    std::vector<const Detection*> putter_dets;
     std::vector<const Detection*> hole_dets;
     for (const auto& d : detections) {
         if (d.class_id == kBallClassId) {
             ball_dets.push_back(&d);
-        } else if (d.class_id == kPutterClassId && d.confidence > best_putter_conf) {
-            best_putter = &d;
-            best_putter_conf = d.confidence;
+        } else if (d.class_id == kPutterClassId) {
+            putter_dets.push_back(&d);
+            if (d.confidence > best_putter_conf) {
+                best_putter = &d;
+                best_putter_conf = d.confidence;
+            }
         } else if (d.class_id == kHoleClassId) {
             hole_dets.push_back(&d);
         }
@@ -106,19 +112,29 @@ void Tracker::update(const std::vector<Detection>& detections, double dt) {
                   return a.y < b.y;
               });
 
-    // Multi-ball: match detections to existing balls by position (like holes)
+    // Multi-ball: match by position; widen search radius when the ball is moving fast so putts
+    // do not drop the track (new stable_id => username / aim line lost in the app).
     std::vector<bool> ball_matched(balls_.size(), false);
+    const float dt_f = static_cast<float>(dt);
     for (const Detection* d : ball_dets) {
         float dx = d->cx();
         float dy = d->cy();
-        float best_d2 = kBallMatchDistPx * kBallMatchDistPx;
+        float best_d2 = std::numeric_limits<float>::infinity();
         int best_idx = -1;
         for (size_t i = 0; i < balls_.size(); ++i) {
             if (ball_matched[i]) continue;
-            float bx = balls_[i].x - dx;
-            float by = balls_[i].y - dy;
+            const TrackedObject& tr = balls_[i];
+            float bx = tr.x - dx;
+            float by = tr.y - dy;
             float d2 = bx * bx + by * by;
-            if (d2 < best_d2) { best_d2 = d2; best_idx = static_cast<int>(i); }
+            float speed = std::sqrt(tr.vx * tr.vx + tr.vy * tr.vy);
+            float max_dist = kBallMatchDistPx + speed * dt_f * kBallMatchSpeedScale;
+            if (max_dist > kBallMatchMaxPx) max_dist = kBallMatchMaxPx;
+            float thresh2 = max_dist * max_dist;
+            if (d2 <= thresh2 && d2 < best_d2) {
+                best_d2 = d2;
+                best_idx = static_cast<int>(i);
+            }
         }
         if (best_idx >= 0) {
             ball_matched[best_idx] = true;
@@ -126,7 +142,11 @@ void Tracker::update(const std::vector<Detection>& detections, double dt) {
         } else {
             TrackedObject b;
             b.class_id = kBallClassId;
-            // Recycle stable_id from a ball that disappeared; next ball to appear gets that user's index
+            // Recycle stable_id from a ball that disappeared (never recycle IDs still claimed in the app).
+            while (!recycled_stable_ids_.empty() &&
+                   reserved_stable_ids_.count(recycled_stable_ids_.front()) != 0u) {
+                recycled_stable_ids_.pop_front();
+            }
             if (!recycled_stable_ids_.empty()) {
                 b.stable_id = recycled_stable_ids_.front();
                 recycled_stable_ids_.pop_front();
@@ -140,25 +160,70 @@ void Tracker::update(const std::vector<Detection>& detections, double dt) {
     }
     for (size_t i = 0; i < balls_.size(); ++i) {
         if (!ball_matched[i]) {
+            // Putter occlusion: if a putter is near this ball's last position, keep it
+            // valid (the putter head is hiding the ball from the camera, not a real loss).
+            if (balls_[i].valid) {
+                bool putter_occluding = false;
+                for (const Detection* pd : putter_dets) {
+                    float px = pd->cx() - balls_[i].x;
+                    float py = pd->cy() - balls_[i].y;
+                    if (px * px + py * py < kBallMatchDistPx * kBallMatchDistPx) {
+                        putter_occluding = true;
+                        break;
+                    }
+                }
+                if (putter_occluding) {
+                    balls_[i].frames_since_seen = 0;
+                    continue;
+                }
+            }
             update_track(balls_[i], nullptr, dt);
             if (!balls_[i].valid) {
-                // Recycle stable_id so the next ball to appear gets this user's claim
-                recycled_stable_ids_.push_back(balls_[i].stable_id);
+                const int sid = balls_[i].stable_id;
+                if (reserved_stable_ids_.count(sid) != 0u) {
+                    // Keep ghost at last (x,y) so a detection can re-match; stable_id stays claimed.
+                    continue;
+                }
+                recycled_stable_ids_.push_back(sid);
                 balls_.erase(balls_.begin() + static_cast<std::ptrdiff_t>(i));
                 ball_matched.erase(ball_matched.begin() + static_cast<std::ptrdiff_t>(i));
                 --i;
             }
         }
     }
-    if (balls_.size() > kMaxBalls) balls_.resize(kMaxBalls);
+    if (balls_.size() > kMaxBalls) {
+        for (auto it = balls_.begin(); it != balls_.end() && balls_.size() > kMaxBalls;) {
+            if (reserved_stable_ids_.count(it->stable_id) != 0u) {
+                ++it;
+            } else {
+                recycled_stable_ids_.push_back(it->stable_id);
+                it = balls_.erase(it);
+            }
+        }
+        if (balls_.size() > kMaxBalls) {
+            balls_.resize(kMaxBalls);
+        }
+    }
     std::sort(balls_.begin(), balls_.end(),
               [](const TrackedObject& a, const TrackedObject& b) {
                   if (a.x != b.x) return a.x < b.x;
                   return a.y < b.y;
               });
 
-    // Putter (single)
+    // Putter (single best for legacy/UE)
     update_track(putter_, best_putter, dt);
+
+    // All putters (raw per-frame, no tracking)
+    putters_.clear();
+    for (const Detection* d : putter_dets) {
+        TrackedObject p;
+        p.class_id = kPutterClassId;
+        p.x = d->cx();
+        p.y = d->cy();
+        p.confidence = d->confidence;
+        p.valid = true;
+        putters_.push_back(p);
+    }
 
     // Primary hole: sticky selection - don't switch when new hole appears. Use position-based matching.
     if (holes_.empty()) {
@@ -247,6 +312,7 @@ void Tracker::update(const std::vector<Detection>& detections, double dt) {
 }
 
 void Tracker::update_track(TrackedObject& track, const Detection* det, double dt) {
+    const bool claim_reserved = reserved_stable_ids_.count(track.stable_id) != 0u;
     if (det) {
         float new_x = det->cx();
         float new_y = det->cy();
@@ -273,6 +339,9 @@ void Tracker::update_track(TrackedObject& track, const Detection* det, double dt
         track.frames_since_seen = 0;
         track.valid = true;
     } else {
+        if (claim_reserved && !track.valid) {
+            return;
+        }
         track.frames_since_seen++;
         if (track.frames_since_seen > max_lost_) {
             track.valid = false;

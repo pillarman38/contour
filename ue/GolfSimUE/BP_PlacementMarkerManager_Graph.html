@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BP_PlacementMarkerManager — Blueprint graph (reference)</title>
+  <style>
+    :root {
+      --bg: #0f0f0f;
+      --grid: rgba(255, 255, 255, 0.04);
+      --border: #1e1e1e;
+      --text: #e0e0e0;
+      --text-dim: #9aa0a6;
+      --exec: #ffffff;
+      --exec-line: #f0f0f0;
+      --pin-data: #8fd3ff;
+      --pin-bool: #cd2121;
+      --pin-int: #86c56c;
+      --pin-obj: #6eb5e8;
+      --event-h: #a93226;
+      --event-h2: #7b241c;
+      --func-h: #2a5a9e;
+      --func-h2: #1e4273;
+      --flow-h: #6c3483;
+      --flow-h2: #4a2358;
+      --macro-h: #1e8449;
+      --var-h: #117864;
+      --custom-h: #922b21;
+      --body: #252526;
+      --comment: #4a6741;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.45;
+    }
+
+    header {
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      background: #141414;
+    }
+    header h1 {
+      margin: 0 0 0.35rem;
+      font-size: 1.15rem;
+      font-weight: 600;
+    }
+    header p {
+      margin: 0;
+      color: var(--text-dim);
+      font-size: 0.875rem;
+    }
+
+    .graph-section {
+      padding: 1.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .graph-section h2 {
+      margin: 0 0 1rem;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-dim);
+      font-weight: 600;
+    }
+
+    .bp-canvas {
+      position: relative;
+      min-height: 120px;
+      padding: 1.25rem;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background-color: #121314;
+      background-image:
+        linear-gradient(var(--grid) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+      background-size: 16px 16px;
+      overflow-x: auto;
+    }
+
+    .bp-row {
+      display: flex;
+      flex-direction: row;
+      align-items: flex-start;
+      gap: 0;
+      flex-wrap: nowrap;
+      min-width: min-content;
+    }
+    .bp-col {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.75rem;
+    }
+
+    /* Exec wire between nodes */
+    .wire-h {
+      display: flex;
+      align-items: center;
+      align-self: stretch;
+      min-width: 28px;
+      position: relative;
+    }
+    .wire-h::after {
+      content: "";
+      width: 100%;
+      height: 3px;
+      background: var(--exec-line);
+      border-radius: 1px;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.35);
+    }
+    .wire-h.tri::after {
+      clip-path: polygon(0 40%, 70% 40%, 70% 0, 100% 50%, 70% 100%, 70% 60%, 0 60%);
+      height: 12px;
+    }
+
+    .wire-v {
+      width: 3px;
+      min-height: 24px;
+      background: var(--exec-line);
+      margin-left: 12px;
+      border-radius: 1px;
+    }
+
+    .node {
+      flex: 0 0 auto;
+      min-width: 180px;
+      max-width: 260px;
+      border-radius: 2px;
+      overflow: hidden;
+      border: 1px solid rgba(0,0,0,0.5);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+      font-size: 0.72rem;
+    }
+    .node-title {
+      padding: 0.35rem 0.5rem;
+      font-weight: 600;
+      color: #fff;
+      text-shadow: 0 1px 1px rgba(0,0,0,0.35);
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+    .node-title .flag {
+      width: 10px;
+      height: 14px;
+      background: rgba(255,255,255,0.25);
+      border-radius: 1px;
+    }
+    .node-body {
+      background: var(--body);
+      padding: 0.4rem 0.45rem;
+      border-top: 1px solid rgba(0,0,0,0.35);
+    }
+    .node-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.35rem;
+      padding: 0.15rem 0;
+      min-height: 1.25rem;
+    }
+    .node-row .lbl { color: var(--text-dim); }
+    .pin {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      border: 1px solid rgba(0,0,0,0.45);
+    }
+    .pin.exec {
+      background: #fff;
+      border-radius: 1px;
+      width: 10px;
+      height: 10px;
+    }
+    .pin.bool { background: var(--pin-bool); }
+    .pin.data { background: var(--pin-data); }
+    .pin.obj { background: var(--pin-obj); }
+    .pin.int { background: var(--pin-int); }
+
+    .event .node-title { background: linear-gradient(180deg, var(--event-h), var(--event-h2)); }
+    .function .node-title { background: linear-gradient(180deg, var(--func-h), var(--func-h2)); }
+    .flow .node-title { background: linear-gradient(180deg, var(--flow-h), var(--flow-h2)); }
+    .macro .node-title { background: linear-gradient(180deg, var(--macro-h), #145a32); }
+    .variable .node-title { background: linear-gradient(180deg, var(--var-h), #0e6251); }
+    .custom .node-title { background: linear-gradient(180deg, var(--custom-h), #641e16); }
+    .bind .node-title { background: linear-gradient(180deg, #6c3483, #4a235a); }
+    .create-event .node-title { background: linear-gradient(180deg, #2874a6, #1a5276); }
+    .func-entry .node-title { background: linear-gradient(180deg, #b7950b, #7d6608); }
+    .comment-box {
+      border: 1px dashed var(--comment);
+      background: rgba(74, 103, 65, 0.15);
+      color: #a9c4a3;
+      padding: 0.5rem 0.65rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      max-width: 320px;
+      align-self: center;
+    }
+
+    .merge-note {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 0 0.5rem;
+      color: var(--text-dim);
+      font-size: 0.7rem;
+      text-align: center;
+    }
+    .merge-note strong { color: var(--exec); }
+
+    .subgraph-box {
+      margin-top: 1rem;
+      padding: 1rem;
+      border: 1px dashed #3d3d3d;
+      border-radius: 4px;
+      background: rgba(0,0,0,0.2);
+    }
+    .subgraph-box h3 {
+      margin: 0 0 0.75rem;
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      font-weight: 600;
+    }
+
+    footer {
+      padding: 1rem 1.5rem 2rem;
+      color: var(--text-dim);
+      font-size: 0.75rem;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>BP_PlacementMarkerManager — Event Graph (reference layout)</h1>
+  <p>One Actor Blueprint: all logic lives on the <strong>Event Graph</strong> — no separate “manager” actor, no <strong>Blueprint Functions</strong> required (custom events optional). Passive <code>PlaceBallMarker</code> actors are referenced from the <code>MarkerPool</code> array. Static mock-up; not exported from UE.</p>
+</header>
+
+<!-- ========== Begin Play + bind ========== -->
+<section class="graph-section">
+  <h2>Event Graph · Begin Play → resolve UDP receiver → bind On UDP Data Received</h2>
+  <div class="bp-canvas">
+    <div class="bp-row">
+      <div class="node event">
+        <div class="node-title"><span class="flag"></span> Event BeginPlay</div>
+        <div class="node-body">
+          <div class="node-row">
+            <span class="pin exec"></span>
+            <span class="lbl">then</span>
+          </div>
+        </div>
+      </div>
+      <div class="wire-h" aria-hidden="true"></div>
+
+      <div class="node macro">
+        <div class="node-title">Is Valid</div>
+        <div class="node-body">
+          <div class="node-row">
+            <span class="pin exec"></span>
+            <span class="lbl">exec</span>
+            <span class="pin obj"></span>
+          </div>
+          <div class="node-row">
+            <span class="pin obj"></span>
+            <span class="lbl">Object</span>
+            <span class="lbl" style="font-style:italic">UDPReceiver</span>
+          </div>
+          <div class="node-row">
+            <span class="pin exec"></span>
+            <span class="lbl">Is Valid</span>
+          </div>
+          <div class="node-row">
+            <span class="pin exec"></span>
+            <span class="lbl">Is Not Valid</span>
+          </div>
+        </div>
+      </div>
+      <div class="wire-h" aria-hidden="true"></div>
+
+      <div class="node flow">
+        <div class="node-title">Branch</div>
+        <div class="node-body">
+          <div class="node-row">
+            <span class="pin exec"></span>
+            <span class="lbl"></span>
+          </div>
+          <div class="node-row">
+            <span class="pin bool"></span>
+            <span class="lbl">Condition</span>
+            <span class="lbl">(Is Valid)</span>
+          </div>
+          <div class="node-row">
+            <span class="pin exec"></span>
+            <span class="lbl">True</span>
+          </div>
+          <div class="node-row">
+            <span class="pin exec"></span>
+            <span class="lbl">False</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="bp-row" style="margin-top: 1rem; margin-left: 2rem;">
+      <div class="comment-box">
+        <strong>False path only</strong> (invalid / empty <code>UDPReceiver</code>): run <strong>Get UDP Golf Receiver In World</strong>. Connect <strong>World Context Object</strong> to <strong>Self</strong> — not the unset receiver. Return value → <strong>SET UDPReceiver</strong>. If the node still requires a wrong <strong>Target</strong> pin, fall back to <strong>Get Actor of Class</strong> (UDP Golf Receiver) or set the reference in the level.
+      </div>
+    </div>
+
+    <div class="bp-row" style="margin-top: 1.25rem;">
+      <div class="node function">
+        <div class="node-title">Get UDP Golf Receiver In World</div>
+        <div class="node-body">
+          <div class="node-row">
+            <span class="pin exec"></span>
+            <span class="lbl"></span>
+            <span class="pin exec"></span>
+          </div>
+          <div class="node-row">
+            <span class="pin obj"></span>
+            <span class="lbl">World Context Object</span>
+            <span class="lbl" style="font-style:italic">Self</span>
+          </div>
+          <div class="node-row">
+            <span class="lbl">Return Value</span>
+            <span class="pin obj"></span>
+            <span class="lbl">UDP Golf Receiver</span>
+          </div>
+        </div>
+      </div>
+      <div class="wire-h"></div>
+      <div class="node variable">
+        <div class="node-title">SET</div>
+        <div class="node-body">
+          <div class="node-row">
+            <span class="pin exec"></span>
+            <span class="lbl">exec</span>
+            <span class="pin exec"></span>
+          </div>
+          <div class="node-row">
+            <span class="lbl" style="width:100%">UDPReceiver</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="merge-note" style="margin: 1rem 0;">
+      <strong>Merge execution</strong><br />
+      Wire <strong>Branch · True</strong> and <strong>SET · out</strong> into the same chain so binding always runs when the receiver is valid.
+    </div>
+
+    <div class="comment-box" style="max-width:100%; margin-bottom:0.75rem;">
+      <strong>After merge (True + SET):</strong> <strong>Assign On UDP Data Received</strong> (Target = <code>UDPReceiver</code>). Set the event to a <strong>Custom Event</strong> you add in <em>this same</em> Event Graph (e.g. <code>OnRefreshPlacementMarkers</code>). The <strong>next section</strong> is the body of that event — no second Blueprint, no Functions tab.
+    </div>
+
+    <div class="bp-row">
+      <div class="node function">
+        <div class="node-title">Assign On UDP Data Received</div>
+        <div class="node-body">
+          <div class="node-row">
+            <span class="pin exec"></span>
+            <span class="lbl"></span>
+          </div>
+          <div class="node-row">
+            <span class="lbl">Target</span>
+            <span class="pin obj"></span>
+            <span class="lbl">UDPReceiver</span>
+          </div>
+          <div class="node-row">
+            <span class="lbl">Event</span>
+            <span class="lbl" style="font-style:italic">→ OnRefreshPlacementMarkers</span>
+          </div>
+        </div>
+      </div>
+      <div class="wire-h"></div>
+      <div class="node custom">
+        <div class="node-title">Custom Event · OnRefreshPlacementMarkers</div>
+        <div class="node-body">
+          <div class="node-row">
+            <span class="pin exec"></span>
+            <span class="lbl">(definition head — body below)</span>
+          </div>
+          <div class="node-row">
+            <span class="lbl">Payload</span>
+            <span class="pin data"></span>
+            <span class="lbl" style="color:#888;font-size:0.65rem">optional</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p style="margin:0.65rem 0 0; font-size:0.7rem; color: var(--text-dim);">
+      Add <strong>Custom Event · OnRefreshPlacementMarkers</strong> from the <strong>My Blueprint</strong> panel, then wire its execution output straight into <strong>For Each Loop · Exec</strong> as shown in the next section. <strong>Payload</strong> can stay unwired if you only read <strong>UDPReceiver</strong>.
+    </p>
+  </div>
+</section>
+
+<!-- ========== Update markers (event graph body) ========== -->
+<section class="graph-section">
+  <h2>Event Graph · OnRefreshPlacementMarkers → marker pool (same graph)</h2>
+  <p style="margin:-0.5rem 0 1rem; font-size:0.75rem; color: var(--text-dim);">
+    This is a continuation of <strong>BP_PlacementMarkerManager</strong>’s <strong>Event Graph</strong> (not a Blueprint Function). Variables: <strong>UDPReceiver</strong>, <strong>MarkerPool</strong> (<code>TArray</code> of marker actors). Each <code>PlaceBallMarker</code> in the level stays passive — this actor moves/hides them by index.
+  </p>
+  <div class="bp-canvas">
+    <p style="margin:0 0 0.75rem; font-size:0.72rem; color: var(--text-dim);">
+      <strong>Execution (white):</strong> <strong>Custom Event · OnRefreshPlacementMarkers</strong> (output exec) <strong>→ For Each Loop · Exec</strong>.<br />
+      <strong>Data (blue):</strong> <strong>GET UDPReceiver → Get Waiting · Target</strong>; <strong>Out Markers → For Each · Array</strong> (input).<br />
+      Many builds expose <strong>Get Waiting Placement Markers World</strong> as <strong>pure</strong> (no exec) — the loop still runs; pulling <strong>Array</strong> evaluates the getter. If your node has exec pins, you may chain <strong>then → Get Waiting in → Get Waiting out → For Each Exec</strong> instead.
+    </p>
+
+    <!-- Exec row -->
+    <div class="bp-row">
+      <div class="node custom">
+        <div class="node-title">Custom Event · OnRefreshPlacementMarkers</div>
+        <div class="node-body">
+          <div class="node-row">
+            <span class="pin exec"></span>
+            <span class="lbl">then →</span>
+          </div>
+        </div>
+      </div>
+      <div class="wire-h"></div>
+      <div class="node flow">
+        <div class="node-title">For Each Loop</div>
+        <div class="node-body">
+          <div class="node-row">
+            <span class="pin exec"></span>
+            <span class="lbl"><strong>Exec</strong> <span style="color:#86c56c">← event</span></span>
+          </div>
+          <div class="node-row" style="background:rgba(134,197,108,0.12);margin:0.15rem -0.45rem;padding:0.15rem 0.45rem;border-radius:2px;">
+            <span class="pin data"></span>
+            <span class="lbl"><strong>Array</strong> <span style="color:#86c56c">(input)</span></span>
+            <span class="lbl" style="font-size:0.65rem;color:#8fd3ff">← Out Markers</span>
+          </div>
+          <div class="node-row">
+            <span class="pin exec"></span>
+            <span class="lbl">Loop Body</span>
+            <span class="pin exec"></span>
+          </div>
+          <div class="node-row">
+            <span class="lbl">Array Element</span>
+            <span class="pin data"></span>
+            <span class="lbl" style="color:#cd2121;font-size:0.62rem">output — do not feed Out Markers here</span>
+          </div>
+          <div class="node-row">
+            <span class="lbl">Array Index</span>
+            <span class="pin int"></span>
+          </div>
+          <div class="node-row">
+            <span class="pin exec"></span>
+            <span class="lbl"><strong>Completed</strong> → hide extras (below)</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Data row -->
+    <div class="bp-row" style="margin-top:0.85rem;align-items:flex-end;">
+      <div class="node variable" style="min-width:140px;">
+        <div class="node-title">GET</div>
+        <div class="node-body">
+          <div class="node-row">
+            <span class="lbl" style="width:100%">UDPReceiver</span>
+            <span class="pin obj"></span>
+          </div>
+        </div>
+      </div>
+      <div class="wire-h"></div>
+      <div class="node function">
+        <div class="node-title">f Get Waiting Placement Markers World</div>
+        <div class="node-body">
+          <div class="node-row" style="font-size:0.62rem;color:#9aa0a6;font-style:italic;padding-bottom:0.2rem;">pure / no exec (typical)</div>
+          <div class="node-row">
+            <span class="pin obj"></span>
+            <span class="lbl">Target</span>
+            <span class="lbl" style="font-style:italic;color:#8fd3ff">← UDPReceiver</span>
+          </div>
+          <div class="node-row" style="background:rgba(142,179,255,0.08);margin:0.2rem -0.45rem;padding:0.2rem 0.45rem;border-radius:2px;">
+            <span class="lbl" style="flex:1"><strong>Out Markers</strong> <span style="color:#86c56c">(out)</span></span>
+            <span class="pin data"></span>
+          </div>
+        </div>
+      </div>
+      <div class="bp-col" style="justify-content:center;min-width:100px;padding-left:0.5rem;">
+        <span style="font-size:0.68rem;color:#8fd3ff;line-height:1.3;">same graph:<br />wire to<br /><strong>For Each · Array</strong></span>
+      </div>
+    </div>
+
+    <div class="comment-box" style="max-width:100%; margin-top:0.75rem;border-color:#922b21;background:rgba(146,43,33,0.12);color:#f5b7b1;">
+      <strong>Wrong:</strong> <strong>Out Markers</strong> → <strong>Array Element</strong> (that pin is loop <em>output</em>).<br />
+      <strong>Right:</strong> <strong>Out Markers</strong> → <strong>Array</strong> input only.
+    </div>
+
+    <div class="comment-box" style="max-width:100%; margin-top:0.5rem;">
+      <strong>Ref / by-name array pin:</strong> Promote <strong>Out Markers</strong> to a local <code>Markers</code> if you need <strong>Length</strong> for the hide-extra loop. Otherwise <strong>Length</strong> on the same array reference works.
+    </div>
+
+    <div class="subgraph-box">
+      <h3>Pattern · Move one pooled actor by index</h3>
+      <p style="margin:0 0 0.65rem; font-size:0.7rem; color: var(--text-dim);">
+        You never “set location on the index” directly — you <strong>GET</strong> the <code>Actor</code> at that index from <strong>MarkerPool</strong>, then use it as <strong>Set Actor Location → Target</strong>.
+      </p>
+      <div class="bp-row" style="flex-wrap:wrap;gap:0.65rem;align-items:flex-start;">
+        <div class="node function" style="min-width:200px;">
+          <div class="node-title">GET (array elem)</div>
+          <div class="node-body">
+            <div class="node-row"><span class="pin data"></span><span class="lbl">Array</span><span class="lbl" style="font-style:italic;font-size:0.65rem">MarkerPool</span></div>
+            <div class="node-row"><span class="pin int"></span><span class="lbl">Index</span><span class="lbl" style="font-size:0.65rem"><strong>Loop Index</strong> or <strong>Array Index</strong></span></div>
+            <div class="node-row"><span class="lbl">Output</span><span class="pin obj"></span><span class="lbl" style="font-size:0.62rem">one actor</span></div>
+          </div>
+        </div>
+        <div class="bp-col" style="justify-content:center;padding:0 0.25rem;">
+          <span style="font-size:0.7rem;color:#8fd3ff;">Target</span>
+          <div style="height:3px;width:40px;background:#8fd3ff;opacity:0.85;"></div>
+        </div>
+        <div class="node function" style="min-width:190px;">
+          <div class="node-title">Set Actor Location</div>
+          <div class="node-body">
+            <div class="node-row"><span class="pin exec"></span><span class="lbl"></span><span class="pin exec"></span></div>
+            <div class="node-row"><span class="lbl">Target</span><span class="pin obj"></span><span class="lbl" style="font-size:0.62rem">← GET output</span></div>
+            <div class="node-row"><span class="lbl">New Location</span><span class="pin data"></span><span class="lbl" style="font-size:0.62rem">vector</span></div>
+          </div>
+        </div>
+      </div>
+      <ul style="margin:0.65rem 0 0; padding-left:1.1rem; font-size:0.7rem; color: var(--text-dim);">
+        <li>Right‑click → search <strong>GET</strong> on the array, or drag from <strong>MarkerPool</strong> → <strong>Get (a ref)</strong> with an <strong>Index</strong> pin.</li>
+        <li><strong>For Loop</strong> → wire <strong>Loop Index</strong> into <strong>Index</strong>. <strong>For Each</strong> on markers → wire <strong>Array Index</strong> into <strong>Index</strong> when slot <code>i</code> maps to <code>MarkerPool[i]</code>.</li>
+        <li>Keep indices in range: <strong>Last Index</strong> = <code>MarkerPool.Num − 1</code>, or <strong>Branch</strong> <code>Index &lt; MarkerPool.Num</code> before <strong>Set Actor Location</strong>.</li>
+      </ul>
+    </div>
+
+    <div class="subgraph-box">
+      <h3>For Each Loop · Loop Body <span style="font-weight:400;color:var(--text-dim)">(exec + data)</span></h3>
+      <p style="margin:0 0 0.65rem; font-size:0.7rem; color: var(--text-dim);">
+        <strong>White chain:</strong> <strong>Loop Body</strong> → <strong>Set Actor Location</strong> → <strong>Set Actor Hidden In Game</strong> (New Hidden = <strong>false</strong>).
+      </p>
+      <div class="bp-row" style="margin-bottom:0.65rem;">
+        <div class="node flow">
+          <div class="node-title">For Each · Loop Body</div>
+          <div class="node-body">
+            <div class="node-row"><span class="pin exec"></span><span class="lbl">out</span></div>
+          </div>
+        </div>
+        <div class="wire-h"></div>
+        <div class="node function">
+          <div class="node-title">Set Actor Location</div>
+          <div class="node-body">
+            <div class="node-row"><span class="pin exec"></span><span class="lbl"></span><span class="pin exec"></span></div>
+            <div class="node-row"><span class="lbl">Target</span><span class="pin obj"></span><span class="lbl" style="font-size:0.65rem">← GET MarkerPool[Index]</span></div>
+            <div class="node-row"><span class="lbl">New Location</span><span class="pin data"></span><span class="lbl" style="font-size:0.65rem">← Break · World Location</span></div>
+          </div>
+        </div>
+        <div class="wire-h"></div>
+        <div class="node function">
+          <div class="node-title">Set Actor Hidden In Game</div>
+          <div class="node-body">
+            <div class="node-row"><span class="pin exec"></span><span class="lbl"></span><span class="pin exec"></span></div>
+            <div class="node-row"><span class="lbl">New Hidden</span><span class="pin bool"></span><span class="lbl">false</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="bp-row" style="flex-wrap:wrap;gap:0.5rem;">
+        <div class="node function">
+          <div class="node-title">Break Golf Waiting Placement World</div>
+          <div class="node-body">
+            <div class="node-row"><span class="pin data"></span><span class="lbl">Struct</span><span class="lbl" style="font-style:italic;font-size:0.65rem">← Array Element</span></div>
+            <div class="node-row"><span class="lbl">World Location</span><span class="pin data"></span></div>
+          </div>
+        </div>
+        <div class="node function">
+          <div class="node-title">GET MarkerPool[Index]</div>
+          <div class="node-body">
+            <div class="node-row"><span class="pin data"></span><span class="lbl">Array</span><span class="lbl" style="font-style:italic;font-size:0.65rem">MarkerPool</span></div>
+            <div class="node-row"><span class="lbl">Index</span><span class="pin int"></span><span class="lbl" style="font-style:italic;font-size:0.65rem">← Array Index</span></div>
+            <div class="node-row"><span class="lbl">Output</span><span class="pin obj"></span><span class="lbl">→ Set Location · Target</span></div>
+          </div>
+        </div>
+      </div>
+      <p style="margin:0.65rem 0 0; font-size:0.7rem; color: var(--text-dim);">
+        Optional: <strong>Branch</strong> <code>Array Index &lt; MarkerPool.Num()</code> before <strong>Set Actor Location</strong> if the pool can be shorter than the marker list. Otherwise rely on the <strong>Completed</strong> hide pass below.
+      </p>
+    </div>
+
+    <div class="subgraph-box">
+      <h3>For Each · Completed → hide unused pool slots</h3>
+      <p style="margin:0 0 0.65rem; font-size:0.7rem; color: var(--text-dim);">
+        After every visible placement is updated, hide actors in <strong>MarkerPool</strong> whose index is <strong>≥</strong> number of waiting markers (<strong>Out Markers</strong> length).
+      </p>
+      <div class="bp-row">
+        <div class="node flow">
+          <div class="node-title">For Each · Completed</div>
+          <div class="node-body">
+            <div class="node-row"><span class="pin exec"></span><span class="lbl">out</span></div>
+          </div>
+        </div>
+        <div class="wire-h"></div>
+        <div class="node flow">
+          <div class="node-title">For Loop</div>
+          <div class="node-body">
+            <div class="node-row"><span class="pin exec"></span><span class="lbl"></span><span class="pin exec"></span></div>
+            <div class="node-row"><span class="lbl">First Index</span><span class="pin int"></span><span class="lbl" style="font-size:0.62rem">Out Markers / Markers · Length</span></div>
+            <div class="node-row"><span class="lbl">Last Index</span><span class="pin int"></span><span class="lbl" style="font-size:0.62rem">MarkerPool.Num − 1</span></div>
+            <div class="node-row"><span class="lbl">Loop Index</span><span class="pin int"></span><span class="lbl">→ i</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="bp-row" style="margin-top:0.65rem;">
+        <div class="node flow">
+          <div class="node-title">Loop Body</div>
+          <div class="node-body">
+            <div class="node-row"><span class="pin exec"></span><span class="lbl"></span></div>
+          </div>
+        </div>
+        <div class="wire-h"></div>
+        <div class="node function">
+          <div class="node-title">GET MarkerPool[Index]</div>
+          <div class="node-body">
+            <div class="node-row"><span class="pin data"></span><span class="lbl">Array</span><span class="lbl" style="font-style:italic;font-size:0.65rem">MarkerPool</span></div>
+            <div class="node-row"><span class="lbl">Index</span><span class="pin int"></span><span class="lbl">← Loop Index</span></div>
+            <div class="node-row"><span class="lbl">Output</span><span class="pin obj"></span><span class="lbl">→ Set Hidden · Target</span></div>
+          </div>
+        </div>
+        <div class="wire-h"></div>
+        <div class="node function">
+          <div class="node-title">Set Actor Hidden In Game</div>
+          <div class="node-body">
+            <div class="node-row"><span class="lbl">New Hidden</span><span class="pin bool"></span><span class="lbl">true</span></div>
+          </div>
+        </div>
+      </div>
+      <p style="margin:0.5rem 0 0; font-size:0.65rem; color:#86c56c;">
+        If <strong>Length</strong> &gt; <strong>MarkerPool.Num</strong>, clamp <strong>First Index</strong> so the loop does not run (e.g. <strong>Branch</strong> before <strong>For Loop</strong>).
+      </p>
+    </div>
+
+    <div class="subgraph-box">
+      <h3>Alternative · For Loop (entire pool — hides extras in one pass)</h3>
+      <p style="margin:0 0 0.75rem; font-size:0.7rem; color: var(--text-dim);">
+        Same <strong>Get Waiting…</strong> chain as above, then <strong>For Loop</strong> with <strong>Last Index</strong> = <code>MarkerPool.Num − 1</code>. Compare <strong>Loop Index</strong> to <code>Markers</code> length (same array as <strong>Out Markers</strong>).
+      </p>
+      <div class="bp-row">
+        <div class="node flow">
+          <div class="node-title">Branch</div>
+          <div class="node-body">
+            <div class="node-row">
+              <span class="pin exec"></span>
+              <span class="lbl"></span>
+            </div>
+            <div class="node-row">
+              <span class="pin bool"></span>
+              <span class="lbl">Condition</span>
+              <span class="lbl">Loop Index &lt; Markers.Num</span>
+            </div>
+            <div class="node-row">
+              <span class="pin exec"></span>
+              <span class="lbl">True</span>
+            </div>
+            <div class="node-row">
+              <span class="pin exec"></span>
+              <span class="lbl">False</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bp-row" style="margin-top: 1rem; gap: 2rem;">
+        <div class="bp-col" style="display:flex; flex-direction:column; gap:0.5rem;">
+          <div class="comment-box" style="max-width:280px;"><strong>True</strong> — active placement for pool slot <code>i</code></div>
+          <div class="bp-row">
+            <div class="node function">
+              <div class="node-title">Get (copy)</div>
+              <div class="node-body">
+                <div class="node-row"><span class="lbl">Markers</span><span class="pin data"></span></div>
+                <div class="node-row"><span class="lbl">Index</span><span class="pin int"></span></div>
+              </div>
+            </div>
+            <div class="node function">
+              <div class="node-title">GET Markers[Index]</div>
+              <div class="node-body">
+                <div class="node-row"><span class="lbl">→ World Location</span><span class="pin data"></span></div>
+              </div>
+            </div>
+          </div>
+          <div class="bp-row">
+            <div class="node function">
+              <div class="node-title">GET MarkerPool[Index]</div>
+              <div class="node-body">
+                <div class="node-row"><span class="pin data"></span><span class="lbl">Array</span><span class="lbl" style="font-style:italic;font-size:0.65rem">MarkerPool</span></div>
+                <div class="node-row"><span class="lbl">Index</span><span class="pin int"></span><span class="lbl" style="font-size:0.65rem">← Loop Index</span></div>
+                <div class="node-row"><span class="lbl">Output</span><span class="pin obj"></span><span class="lbl" style="font-size:0.65rem">→ Set Location · Target</span></div>
+              </div>
+            </div>
+            <div class="wire-h"></div>
+            <div class="node function">
+              <div class="node-title">Set Actor Location</div>
+              <div class="node-body">
+                <div class="node-row"><span class="lbl">Target</span><span class="pin obj"></span></div>
+                <div class="node-row"><span class="lbl">New Location</span><span class="pin data"></span></div>
+              </div>
+            </div>
+            <div class="wire-h"></div>
+            <div class="node function">
+              <div class="node-title">Set Actor Hidden In Game</div>
+              <div class="node-body">
+                <div class="node-row"><span class="lbl">New Hidden</span><span class="pin bool"></span><span class="lbl">false</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="bp-col" style="display:flex; flex-direction:column; gap:0.5rem;">
+          <div class="comment-box" style="max-width:280px;"><strong>False</strong> — no placement for this pool index (hide spare)</div>
+          <div class="bp-row">
+            <div class="node function">
+              <div class="node-title">GET MarkerPool[Index]</div>
+              <div class="node-body">
+                <div class="node-row"><span class="pin data"></span><span class="lbl">Array</span><span class="lbl" style="font-style:italic;font-size:0.65rem">MarkerPool</span></div>
+                <div class="node-row"><span class="lbl">Index</span><span class="pin int"></span><span class="lbl" style="font-size:0.65rem">← Loop Index</span></div>
+                <div class="node-row"><span class="lbl">Output</span><span class="pin obj"></span><span class="lbl" style="font-size:0.65rem">→ Set Hidden · Target</span></div>
+              </div>
+            </div>
+            <div class="wire-h"></div>
+            <div class="node function">
+              <div class="node-title">Set Actor Hidden In Game</div>
+              <div class="node-body">
+                <div class="node-row"><span class="lbl">New Hidden</span><span class="pin bool"></span><span class="lbl">true</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="graph-section">
+  <h2>Optional · Event Tick (same Event Graph)</h2>
+  <div class="bp-canvas">
+    <div class="bp-row">
+      <div class="node event">
+        <div class="node-title"><span class="flag"></span> Event Tick</div>
+        <div class="node-body">
+          <div class="node-row"><span class="pin exec"></span><span class="lbl">then</span></div>
+          <div class="node-row"><span class="lbl">Delta Seconds</span><span class="pin data"></span></div>
+        </div>
+      </div>
+      <div class="wire-h"></div>
+      <div class="node custom">
+        <div class="node-title">Call · OnRefreshPlacementMarkers</div>
+        <div class="node-body">
+          <div class="node-row"><span class="pin exec"></span><span class="lbl"></span></div>
+          <div class="node-row"><span class="lbl" style="font-size:0.65rem;color:#888">or duplicate the marker nodes</span></div>
+        </div>
+      </div>
+    </div>
+    <p style="margin:0.75rem 0 0; font-size:0.75rem; color: var(--text-dim);">
+      Prefer <strong>UDP only</strong>. If you Tick, set <strong>Tick Group</strong> to <strong>Post Update Work</strong>. A <strong>Blueprint Macro</strong> can wrap the shared tail so you don’t paste twice — still no separate Blueprint Function required.
+    </p>
+  </div>
+</section>
+
+<footer>
+  Single <strong>BP_PlacementMarkerManager</strong> Actor Blueprint: Event Graph only in this guide. Variables: <code>UDPReceiver</code>, <code>MarkerPool</code>. See <code>README.md</code> for prose. Use a <strong>Blueprint Function</strong> only if you prefer organization — it is optional.
+</footer>
+
+</body>
+</html>

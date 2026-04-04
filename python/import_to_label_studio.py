@@ -29,21 +29,11 @@ import argparse
 import json
 import os
 import sys
-import time
 from pathlib import Path
 
 import requests as _requests
 
 from label_studio_sdk import Client
-
-# #region agent log
-LOG_PATH = str(Path(__file__).resolve().parent.parent / "debug-import.log")
-def _dbg(hypothesisId, location, message, data=None):
-    import json as _j
-    entry = {"hypothesisId": hypothesisId, "location": location, "message": message, "data": data or {}, "timestamp": int(time.time()*1000)}
-    with open(LOG_PATH, "a") as f:
-        f.write(_j.dumps(entry) + "\n")
-# #endregion
 
 # ── Constants ────────────────────────────────────────────────────────────────
 DEFAULT_LS_URL = "http://localhost:8080"
@@ -117,9 +107,6 @@ def _create_session(ls_url: str, email: str, password: str) -> _requests.Session
     check = sess.get(f"{ls_url}/api/current-user/whoami")
     if check.status_code != 200:
         raise RuntimeError(f"Session login failed (whoami returned {check.status_code})")
-    # #region agent log
-    _dbg("FIX", "create_session", "Session login succeeded", {"status": check.status_code})
-    # #endregion
     return sess
 
 
@@ -157,9 +144,6 @@ def import_to_label_studio(
                     json={"selectedItems": {"all": True, "excluded": []}},
                     headers={"X-CSRFToken": csrf},
                 )
-                # #region agent log
-                _dbg("FIX", "import:delete_tasks", "Delete old tasks", {"status": del_resp.status_code, "count": len(task_ids)})
-                # #endregion
                 print(f"[INFO] Cleared {len(task_ids)} old tasks")
         print(f"[INFO] Using project: id={project_id}")
     else:
@@ -170,9 +154,6 @@ def import_to_label_studio(
             json={"title": project_name, "label_config": LABELING_CONFIG},
             headers={"X-CSRFToken": csrf},
         )
-        # #region agent log
-        _dbg("FIX", "import:create_project", "Create project response", {"status": resp.status_code, "body": resp.text[:300]})
-        # #endregion
         resp.raise_for_status()
         project_data = resp.json()
         project_id = project_data["id"]
@@ -218,9 +199,6 @@ def import_to_label_studio(
                 files={"file": (upload_name, f, "image/png")},
                 headers={"X-CSRFToken": csrf},
             )
-        # #region agent log
-        _dbg("H1", f"import:upload_{idx}", "File import result", {"file": upload_name, "status": resp.status_code, "body": resp.text[:300]})
-        # #endregion
         if resp.status_code in (200, 201):
             print(f"  [{idx}/{len(image_entries)}] Imported: {upload_name}")
         else:
@@ -246,17 +224,11 @@ def import_to_label_studio(
                 if image_url.endswith(upload_name):
                     filename_to_task_id[upload_name] = task_id
                     break
-        # #region agent log
-        _dbg("H2", "import:fetch_tasks", "Fetched tasks page", {"page": page, "count": len(tasks_list), "sample_map": dict(list(filename_to_task_id.items())[:3])})
-        # #endregion
         if isinstance(data, dict) and data.get("next"):
             page += 1
         else:
             break
 
-    # #region agent log
-    _dbg("H2", "import:task_map", "Final filename->task_id map", {"total": len(filename_to_task_id), "entries": dict(list(filename_to_task_id.items())[:5])})
-    # #endregion
     print(f"[INFO] Matched {len(filename_to_task_id)} tasks to filenames")
 
     # Add pre-annotations (predictions) to tasks that have matching YOLO labels
@@ -286,9 +258,6 @@ def import_to_label_studio(
         if pred_resp.status_code in (200, 201):
             pre_annotated += 1
         else:
-            # #region agent log
-            _dbg("FIX", "import:pred_fail", "Prediction add failed", {"task_id": task_id, "status": pred_resp.status_code, "body": pred_resp.text[:200]})
-            # #endregion
             pass
 
     print(f"[INFO] Imported {len(filename_to_task_id)} tasks ({pre_annotated} with pre-annotations)")

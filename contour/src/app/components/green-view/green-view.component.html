@@ -1,8 +1,8 @@
 <div class="green-container">
-  @if (pickerHoleIndex() >= 0) {
+  @if (pickerBallIndex() >= 0) {
     <div class="picker-overlay" (click)="cancelPicker()">
       <div class="picker-panel" (click)="$event.stopPropagation()">
-        <h3 class="picker-title">Who is selecting the target hole?</h3>
+        <h3 class="picker-title">Who is claiming this ball?</h3>
         <div class="picker-list">
           @for (u of usernames(); track u) {
             <button type="button" class="picker-option" (click)="onUsernameSelected(u)">
@@ -21,9 +21,10 @@
     <p class="status">Connecting to tracker...</p>
   } @else {
     <p class="status">
-      Tap a ball to enter your username. Tap a hole to select target (any user, any machine).
-      @if (username()) {
-        <span class="username">({{ username() }})</span>
+      @if (selectedBallUsername()) {
+        <span class="status-selecting">{{ selectedBallUsername() }} selected — put putter down near a hole to aim there.</span>
+      } @else {
+        Hover your putter over a claimed ball to select it. Tap an unclaimed ball to claim it.
       }
     </p>
     <svg
@@ -53,15 +54,9 @@
           stroke-linecap="round"
         />
       }
-      <!-- Holes (min 44px touch target) -->
+      <!-- Holes -->
       @for (hole of holes(); track $index) {
-        <g (click)="onHoleClick($index)" class="hole-hit">
-          <circle
-            [attr.cx]="hole.x"
-            [attr.cy]="hole.y"
-            [attr.r]="holeRadius(hole.radius)"
-            fill="transparent"
-          />
+        <g class="hole-group">
           <circle
             [attr.cx]="hole.x"
             [attr.cy]="hole.y"
@@ -70,16 +65,66 @@
             stroke="#333"
             stroke-width="2"
           />
+          @if (previewHoleIndex() === $index) {
+            <circle
+              [attr.cx]="hole.x"
+              [attr.cy]="hole.y"
+              [attr.r]="hole.radius + 10"
+              fill="none"
+              stroke="#6bcbff"
+              stroke-width="3"
+              class="hole-preview-ring"
+            />
+          }
         </g>
       }
-      <!-- Balls (multi-ball mode: clickable to claim) -->
+      <!-- Return-ball hints -->
+      @for (u of usersAwaitingBallPlacement(); track u.username) {
+        <g class="placement-hint">
+          <circle
+            [attr.cx]="u.placement_pixel_x!"
+            [attr.cy]="u.placement_pixel_y!"
+            r="28"
+            fill="none"
+            stroke="#ffd93d"
+            stroke-width="3"
+            stroke-dasharray="6 4"
+          />
+          <text
+            [attr.x]="u.placement_pixel_x"
+            [attr.y]="(u.placement_pixel_y ?? 0) - 34"
+            text-anchor="middle"
+            class="placement-hint-label"
+          >
+            @if (u.placement_after_putt) {
+              Line up {{ u.username }} here (space between players)
+            } @else {
+              Place {{ u.username }} here
+            }
+          </text>
+        </g>
+      }
+      <!-- Balls (tap unclaimed to claim; putter hover selects claimed) -->
       @for (b of balls(); track b.index) {
-        @if (b.visible) {
+        @if (b.visible || b.username?.trim()) {
           <g
-            (click)="onBallClick(b.index)"
+            (click)="onBallClick(b.index); $event.stopPropagation()"
             class="ball-hit"
+            [class.ball-ghost]="!b.visible && !!b.username?.trim()"
+            [class.ball-selected]="b.username?.trim() === selectedBallUsername()"
             [attr.data-index]="b.index"
           >
+            @if (b.username?.trim() === selectedBallUsername()) {
+              <circle
+                [attr.cx]="b.x"
+                [attr.cy]="b.y"
+                r="16"
+                fill="none"
+                stroke="#ffd93d"
+                stroke-width="2.5"
+                class="ball-select-ring"
+              />
+            }
             <circle
               [attr.cx]="b.x"
               [attr.cy]="b.y"
@@ -94,14 +139,12 @@
               stroke="#333"
               stroke-width="1"
             />
-            @if (b.username) {
-              <text
-                [attr.x]="b.x"
-                [attr.y]="b.y - 20"
-                text-anchor="middle"
-                class="ball-username"
-              >{{ b.username }}</text>
-            }
+            <text
+              [attr.x]="b.x"
+              [attr.y]="b.y - 20"
+              text-anchor="middle"
+              [class]="b.username ? 'ball-username' : 'ball-claim-label'"
+            >{{ b.username || 'Claim this ball' }}</text>
           </g>
         }
       }
@@ -115,6 +158,21 @@
           stroke="#333"
           stroke-width="1"
         />
+      }
+      <!-- Putter crosshair indicators (one per detected putter) -->
+      @for (pt of putters(); track $index) {
+        <g class="putter-indicator" pointer-events="none">
+          <line
+            [attr.x1]="pt.x - 12" [attr.y1]="pt.y"
+            [attr.x2]="pt.x + 12" [attr.y2]="pt.y"
+            stroke="#ff6b6b" stroke-width="2" stroke-opacity="0.8"
+          />
+          <line
+            [attr.x1]="pt.x" [attr.y1]="pt.y - 12"
+            [attr.x2]="pt.x" [attr.y2]="pt.y + 12"
+            stroke="#ff6b6b" stroke-width="2" stroke-opacity="0.8"
+          />
+        </g>
       }
     </svg>
   }

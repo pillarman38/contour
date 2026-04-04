@@ -11,6 +11,7 @@
 #include <chrono>
 #include <deque>
 #include <optional>
+#include <unordered_set>
 #include <vector>
 
 namespace golf {
@@ -54,14 +55,21 @@ public:
     /// Set target hole index from UI (-1 = auto-select closest to ball). When valid, overrides auto-selection.
     void set_target_hole_index(int idx) { target_hole_index_ = idx; }
 
+    /// Stable IDs that must not be recycled while the track is lost (e.g. user claimed this ball in the app).
+    /// Cleared automatically if not set each frame before \ref update.
+    void set_reserved_stable_ids(std::unordered_set<int> ids) { reserved_stable_ids_ = std::move(ids); }
+
     /// Retrieve the current ball state (class_id == 0). First ball for backward compat.
     const TrackedObject& ball() const { return balls_.empty() ? empty_ball_ : balls_[0]; }
 
     /// All tracked balls (position-sorted for stable indices).
     const std::vector<TrackedObject>& balls() const { return balls_; }
 
-    /// Retrieve the current putter state (class_id == 1).
+    /// Retrieve the current putter state (class_id == 1). Best-confidence single putter for legacy/UE.
     const TrackedObject& putter() const { return putter_; }
+
+    /// All putter detections this frame (no stable-ID tracking; raw per-frame positions).
+    const std::vector<TrackedObject>& putters() const { return putters_; }
 
     /// True when any ball track is active.
     bool ball_visible() const { return !balls_.empty() && balls_[0].valid; }
@@ -86,7 +94,8 @@ private:
 
     std::vector<TrackedObject> balls_;  // position-sorted for stable indices
     TrackedObject empty_ball_;          // invalid fallback for ball()
-    TrackedObject putter_;
+    TrackedObject putter_;              // best-confidence single putter (legacy/UE)
+    std::vector<TrackedObject> putters_; // all putter detections this frame
     std::vector<HolePos> holes_;   // all holes this frame
     HolePos hole_pos_;             // primary hole (for PPI / putt-made)
     bool putt_ended_fired_ = false; // prevents repeated "Putt ended" when camera loses/regains ball
@@ -98,6 +107,7 @@ private:
 
     int next_stable_id_ = 0;
     std::deque<int> recycled_stable_ids_;  // FIFO: next new ball gets front
+    std::unordered_set<int> reserved_stable_ids_;
 };
 
 }  // namespace golf

@@ -9,7 +9,9 @@
 //   "timestamp_ms": <uint64>,
 //   "ball": { "x": <f>, "y": <f>, "vx": <f>, "vy": <f>, "conf": <f>, "visible": <bool> },
 //   "putter": { "x": <f>, "y": <f>, "vx": <f>, "vy": <f>, "conf": <f>, "visible": <bool> }
-//   "holes": [ { "x": <f>, "y": <f>, "radius": <f>, "visible": <bool> }, ... ]
+//   "holes": [ { "x": <f>, "y": <f>, "radius": <f>, "visible": <bool> }, ... ],
+//   "balls": [ { "x": <f>, ... "stable_id": <int>, "username": "...", ... }, ... ],
+//   "ball_placements": [ { "username": "...", "stable_id": <int>, "pixel_x": <f>, "pixel_y": <f>, "waiting": <bool>, "after_putt": <bool> }, ... ]
 // }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -28,8 +30,21 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace golf {
+
+/// Where a claimed player should return their ball (camera pixels), for Unreal placement markers.
+struct BallPlacementHint {
+    std::string username;
+    int stable_id = -1;
+    float pixel_x = 0.f;
+    float pixel_y = 0.f;
+    /** True while the ball is not visible (picked up / lost): show marker at pixel_* . */
+    bool waiting = false;
+    /** True when marker is on the return line after a made putt (green center); false = last-known occlusion. */
+    bool after_putt = false;
+};
 
 #ifdef _WIN32
 using socket_t = SOCKET;
@@ -58,16 +73,22 @@ public:
         std::string username;
         PuttData stats;
         bool is_putt_made = false;
+        /** Per-claimed-ball aim target (pixels). Sent in JSON for multi-player aim lines in Unreal. */
+        int target_hole_index = -1;
+        float target_hole_x = 0.f;
+        float target_hole_y = 0.f;
     };
 
     /// Send the current tracker state + putt stats as a JSON datagram.
     /// @param balls  all balls with username and stats (empty = use single-ball legacy)
     /// @param target_hole_index  hole index for ball-to-hole line (-1 = use 0)
+    /// @param placement_hints  per-claimed-user return spots (JSON field ball_placements)
     bool send(const std::vector<BallPayload>& balls,
               const TrackedObject& putter,
               const std::vector<HolePos>& holes,
               int target_hole_index = 0,
-              float target_hole_x = 0.f, float target_hole_y = 0.f);
+              float target_hole_x = 0.f, float target_hole_y = 0.f,
+              const std::vector<BallPlacementHint>& placement_hints = {});
 
     /// Legacy single-ball send (delegates to multi-ball with one entry).
     bool send(const TrackedObject& ball, const TrackedObject& putter,

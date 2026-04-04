@@ -62,7 +62,8 @@ bool UnrealSender::send(const std::vector<BallPayload>& balls,
                         const TrackedObject& putter,
                         const std::vector<HolePos>& holes,
                         int target_hole_index,
-                        float target_hole_x, float target_hole_y) {
+                        float target_hole_x, float target_hole_y,
+                        const std::vector<BallPlacementHint>& placement_hints) {
     if (sock_fd_ == invalid_socket) return false;
 
     auto now = std::chrono::steady_clock::now();
@@ -94,17 +95,19 @@ bool UnrealSender::send(const std::vector<BallPayload>& balls,
         char tmp[640];
         std::snprintf(tmp, sizeof(tmp),
             "{\"x\":%.2f,\"y\":%.2f,\"vx\":%.2f,\"vy\":%.2f,\"conf\":%.3f,\"visible\":%s,"
-            "\"username\":\"",
-            b.x, b.y, b.vx, b.vy, b.confidence, b.valid ? "true" : "false");
+            "\"stable_id\":%d,\"username\":\"",
+            b.x, b.y, b.vx, b.vy, b.confidence, b.valid ? "true" : "false", b.stable_id);
         buf += tmp;
         escape_json_str(buf, bp.username);
         std::snprintf(tmp, sizeof(tmp),
-            "\",\"stats\":{\"putt_number\":%d,\"state\":\"%s\","
+            "\",\"target_hole_index\":%d,\"target_hole_x\":%.2f,\"target_hole_y\":%.2f"
+            ",\"stats\":{\"putt_number\":%d,\"state\":\"%s\","
             "\"launch_speed\":%.2f,\"current_speed\":%.2f,\"peak_speed\":%.2f,"
             "\"total_distance\":%.2f,\"break_distance\":%.2f,\"time_in_motion\":%.2f,"
             "\"start_x\":%.2f,\"start_y\":%.2f,\"peak_speed_x\":%.2f,\"peak_speed_y\":%.2f,"
             "\"final_x\":%.2f,\"final_y\":%.2f"
             "},\"putt_made\":%s}",
+            bp.target_hole_index, bp.target_hole_x, bp.target_hole_y,
             bp.stats.putt_number, bp.stats.state_str(),
             bp.stats.launch_speed, bp.stats.current_speed, bp.stats.peak_speed,
             bp.stats.total_distance, bp.stats.break_distance, bp.stats.time_in_motion,
@@ -130,10 +133,25 @@ bool UnrealSender::send(const std::vector<BallPayload>& balls,
             holes[i].valid ? "true" : "false");
         buf += tmp;
     }
+    buf += "],\"ball_placements\":[";
+    for (size_t i = 0; i < placement_hints.size(); ++i) {
+        if (i > 0) buf += ",";
+        buf += "{\"username\":\"";
+        escape_json_str(buf, placement_hints[i].username);
+        std::snprintf(tmp, sizeof(tmp),
+            "\",\"stable_id\":%d,\"pixel_x\":%.2f,\"pixel_y\":%.2f,\"waiting\":%s,\"after_putt\":%s}",
+            placement_hints[i].stable_id,
+            placement_hints[i].pixel_x,
+            placement_hints[i].pixel_y,
+            placement_hints[i].waiting ? "true" : "false",
+            placement_hints[i].after_putt ? "true" : "false");
+        buf += tmp;
+    }
+    buf += "]";
     int ti = (target_hole_index >= 0 && static_cast<size_t>(target_hole_index) < holes.size())
              ? target_hole_index : 0;
     std::snprintf(tmp, sizeof(tmp),
-        "],\"target_hole_index\":%d,\"target_hole_x\":%.2f,\"target_hole_y\":%.2f,"
+        ",\"target_hole_index\":%d,\"target_hole_x\":%.2f,\"target_hole_y\":%.2f,"
         "\"stats\":{"
         "\"putt_number\":%d,\"state\":\"%s\",\"launch_speed\":%.2f,\"current_speed\":%.2f,"
         "\"peak_speed\":%.2f,\"total_distance\":%.2f,\"break_distance\":%.2f,\"time_in_motion\":%.2f,"

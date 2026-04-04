@@ -22,10 +22,9 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
-#include <fstream>
 #include <iostream>
-#include <sstream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 struct Config {
@@ -160,39 +159,15 @@ int main(int argc, char** argv) {
         int target_idx = api.get_target_hole_index();
         tracker.set_target_hole_index(target_idx);
         bool ball_was_visible = tracker.ball_visible();
+        {
+            std::unordered_set<int> reserved_stable;
+            for (const auto& u : api.get_user_states()) {
+                if (!u.username.empty() && u.ball_index >= 0) reserved_stable.insert(u.ball_index);
+            }
+            tracker.set_reserved_stable_ids(std::move(reserved_stable));
+        }
         tracker.update(detections, dt);
 
-        // Update tracking snapshot for GET /api/tracking
-        {
-            std::lock_guard<std::mutex> lock(tracking_state.mutex);
-            int api_ti = api.get_target_hole_index();
-            tracking_state.snapshot.target_hole_index = (api_ti >= 0) ? api_ti : tracker.primary_hole_index();
-            tracking_state.snapshot.target_hole_x = tracker.hole_pos().x;
-            tracking_state.snapshot.target_hole_y = tracker.hole_pos().y;
-            tracking_state.snapshot.frame_width = orig_w;
-            tracking_state.snapshot.frame_height = orig_h;
-            tracking_state.snapshot.balls.clear();
-            for (const auto& b : tracker.balls()) {
-                golf::TrackingSnapshot::BallInfo bi;
-                bi.x = b.x;
-                bi.y = b.y;
-                bi.visible = b.valid;
-                bi.index = b.stable_id;  // stable identity; next ball to appear gets recycled ID
-                bi.username = api.get_username_for_ball_or_fallback(b.stable_id, tracker.balls().size());
-                bi.target_hole_index = api.get_target_hole_for_ball(b.stable_id);
-                tracking_state.snapshot.balls.push_back(bi);
-            }
-            tracking_state.snapshot.users = api.get_user_states();
-            tracking_state.snapshot.holes.clear();
-            for (const auto& h : tracker.holes()) {
-                golf::TrackingSnapshot::HoleInfo hi;
-                hi.x = h.x;
-                hi.y = h.y;
-                hi.radius = h.radius;
-                hi.visible = h.valid;
-                tracking_state.snapshot.holes.push_back(hi);
-            }
-        }
         if (ball_was_visible && !tracker.ball_visible()) {
             putt_stats.on_ball_lost();  // Ball lost before slowing down: transition to STOPPED so UE can fade
         }
@@ -215,6 +190,7 @@ int main(int argc, char** argv) {
         // When the putt is first detected as made, snapshot the current stats so the
         // payload that carries putt_made=true also carries this putt's numbers.
         if (tracker.is_putt_made && putt_made_frames == 0) {
+            api.notify_putt_made_for_stable_id(tracker.ball().stable_id);
             putt_made_frames = putt_made_hold;
             last_completed_stats = putt_stats.current();
             last_completed_stats.state = golf::PuttState::STOPPED;
@@ -242,6 +218,74 @@ int main(int argc, char** argv) {
             stats_to_send = current;  // Full stats so Unreal displays launch/peak/stop markers.
         }
 
+        // Placement hints: after made putt → green-centre line; occlusion only → last known (sync tracks visibility).
+        float green_cx = static_cast<float>(orig_w) * 0.5f;
+        float green_cy = static_cast<float>(orig_h) * 0.5f;
+        {
+            float hsx = 0.f, hsy = 0.f;
+            int hn = 0;
+            for (const auto& h : tracker.holes()) {
+                if (h.valid) {
+                    hsx += h.x;
+                    hsy += h.y;
+                    ++hn;
+                }
+            }
+            if (hn > 0) {
+                green_cx = hsx / static_cast<float>(hn);
+                green_cy = hsy / static_cast<float>(hn);
+            }
+        }
+        api.sync_ball_placements_from_tracker(tracker.balls());
+        api.finalize_placement_hints(green_cx, green_cy, 90.f);
+        // Made-putt ghost is often far from green-center hint; new detection gets a new stable_id — snap claim to it.
+        api.try_reassign_placement_return_near_hint(tracker.balls(), 320.f);
+        api.sync_ball_placements_from_tracker(tracker.balls());
+        api.finalize_placement_hints(green_cx, green_cy, 90.f);
+
+        // Update tracking snapshot for GET /api/tracking (after placement finalization)
+        {
+            std::lock_guard<std::mutex> lock(tracking_state.mutex);
+            int api_ti = api.get_target_hole_index();
+            tracking_state.snapshot.target_hole_index = (api_ti >= 0) ? api_ti : tracker.primary_hole_index();
+            tracking_state.snapshot.target_hole_x = tracker.hole_pos().x;
+            tracking_state.snapshot.target_hole_y = tracker.hole_pos().y;
+            tracking_state.snapshot.frame_width = orig_w;
+            tracking_state.snapshot.frame_height = orig_h;
+            tracking_state.snapshot.balls.clear();
+            for (const auto& b : tracker.balls()) {
+                golf::TrackingSnapshot::BallInfo bi;
+                bi.x = b.x;
+                bi.y = b.y;
+                bi.visible = b.valid;
+                bi.index = b.stable_id;
+                bi.username = api.get_username_for_ball_or_fallback(b.stable_id, tracker.balls().size());
+                bi.target_hole_index = api.get_target_hole_for_ball(b.stable_id);
+                tracking_state.snapshot.balls.push_back(bi);
+            }
+            tracking_state.snapshot.putter.x = tracker.putter().x;
+            tracking_state.snapshot.putter.y = tracker.putter().y;
+            tracking_state.snapshot.putter.visible = tracker.putter().valid;
+            tracking_state.snapshot.putters.clear();
+            for (const auto& p : tracker.putters()) {
+                golf::TrackingSnapshot::PutterInfo pi;
+                pi.x = p.x;
+                pi.y = p.y;
+                pi.visible = p.valid;
+                tracking_state.snapshot.putters.push_back(pi);
+            }
+            tracking_state.snapshot.users = api.get_user_states();
+            tracking_state.snapshot.holes.clear();
+            for (const auto& h : tracker.holes()) {
+                golf::TrackingSnapshot::HoleInfo hi;
+                hi.x = h.x;
+                hi.y = h.y;
+                hi.radius = h.radius;
+                hi.visible = h.valid;
+                tracking_state.snapshot.holes.push_back(hi);
+            }
+        }
+
         std::vector<golf::UnrealSender::BallPayload> ball_payloads;
         const auto& balls_vec = tracker.balls();
         int ti;
@@ -264,12 +308,29 @@ int main(int argc, char** argv) {
             thx = hp.x;
             thy = hp.y;
         }
+        auto fill_ball_aim = [&](golf::UnrealSender::BallPayload& bp, const golf::TrackedObject& ball_obj) {
+            int tib = api.get_target_hole_for_ball(ball_obj.stable_id);
+            if (tib < 0) tib = tracker.primary_hole_index();
+            bp.target_hole_index = tib;
+            if (tib >= 0 && static_cast<size_t>(tib) < holes_vec.size()) {
+                bp.target_hole_x = holes_vec[static_cast<size_t>(tib)].x;
+                bp.target_hole_y = holes_vec[static_cast<size_t>(tib)].y;
+            } else {
+                const auto& hp = tracker.hole_pos();
+                bp.target_hole_x = hp.x;
+                bp.target_hole_y = hp.y;
+            }
+        };
+
         if (balls_vec.empty()) {
             golf::UnrealSender::BallPayload bp;
             bp.ball = &tracker.ball();
             bp.username = tracker.ball().valid ? api.get_username_for_ball_or_fallback(tracker.ball().stable_id, 1) : "";
             bp.stats = stats_to_send;
             bp.is_putt_made = send_putt_made;
+            if (tracker.ball().valid) {
+                fill_ball_aim(bp, tracker.ball());
+            }
             ball_payloads.push_back(bp);
         } else {
             for (size_t i = 0; i < balls_vec.size(); ++i) {
@@ -278,10 +339,17 @@ int main(int argc, char** argv) {
                 bp.username = api.get_username_for_ball_or_fallback(balls_vec[i].stable_id, balls_vec.size());
                 bp.stats = (i == 0) ? stats_to_send : golf::PuttData{};
                 bp.is_putt_made = (i == 0) ? send_putt_made : false;
+                fill_ball_aim(bp, balls_vec[i]);
                 ball_payloads.push_back(bp);
             }
         }
-        sender.send(ball_payloads, tracker.putter(), tracker.holes(), ti, thx, thy);
+        std::vector<golf::BallPlacementHint> placement_hints;
+        for (const auto& u : api.get_user_states()) {
+            if (u.username.empty() || u.ball_index < 0 || !u.placement_hint_valid) continue;
+            placement_hints.push_back({u.username, u.ball_index, u.placement_pixel_x, u.placement_pixel_y,
+                                     u.placement_waiting, u.placement_after_putt});
+        }
+        sender.send(ball_payloads, tracker.putter(), tracker.holes(), ti, thx, thy, placement_hints);
 
         // Visualise
         if (cfg.show_gui) {

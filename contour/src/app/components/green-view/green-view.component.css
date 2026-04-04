@@ -105,14 +105,18 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-.hole-hit {
-  cursor: pointer;
-  min-width: 44px;
-  min-height: 44px;
+.hole-group circle:first-child {
+  pointer-events: none;
 }
 
-.hole-hit circle:first-child {
-  cursor: pointer;
+.hole-preview-ring {
+  animation: pulse-hole-preview 1s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes pulse-hole-preview {
+  0%, 100% { opacity: 0.9; stroke-width: 3; }
+  50% { opacity: 0.4; stroke-width: 4; }
 }
 
 .ball-hit {
@@ -130,6 +134,51 @@
   stroke: #333;
   stroke-width: 2px;
   pointer-events: none;
+}
+
+.ball-claim-label {
+  font-size: 9px;
+  fill: #aaa;
+  paint-order: stroke;
+  stroke: #222;
+  stroke-width: 2px;
+  pointer-events: none;
+  font-style: italic;
+}
+
+/* Claimed ball temporarily occluded: last known position from tracker */
+.ball-ghost {
+  opacity: 0.55;
+}
+
+.ball-selected .ball-select-ring {
+  animation: pulse-ring 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse-ring {
+  0%, 100% { opacity: 1; stroke-width: 2.5; }
+  50% { opacity: 0.5; stroke-width: 4; }
+}
+
+.status-selecting {
+  color: #d4a017;
+  font-weight: 600;
+}
+
+.putter-indicator line {
+  filter: drop-shadow(0 0 2px rgba(255, 107, 107, 0.6));
+}
+
+.placement-hint {
+  pointer-events: none;
+}
+
+.placement-hint-label {
+  font-size: 11px;
+  fill: #ffd93d;
+  paint-order: stroke;
+  stroke: #1a1a1a;
+  stroke-width: 3px;
 }
 
 @media (max-width: 480px) {

@@ -20,10 +20,26 @@ export interface UserInfo {
   username: string;
   ball_index: number;
   target_hole_index: number;
+  /** Camera pixels: where to return the ball after a putt / pickup */
+  placement_pixel_x?: number;
+  placement_pixel_y?: number;
+  placement_hint_valid?: boolean;
+  /** True when ball not visible — show “place ball here” */
+  placement_waiting?: boolean;
+  /** Made putt: marker on green-center line; false: last-known (occlusion) */
+  placement_after_putt?: boolean;
+}
+
+export interface PutterInfo {
+  x: number;
+  y: number;
+  visible: boolean;
 }
 
 export interface TrackingData {
   ball: { x: number; y: number; visible: boolean };
+  putter: PutterInfo;
+  putters: PutterInfo[];
   balls: BallInfo[];
   holes: HoleInfo[];
   users: UserInfo[];
@@ -119,9 +135,27 @@ export class TrackingService {
             username: String(u['username'] ?? ''),
             ball_index: Number(u['ball_index'] ?? -1),
             target_hole_index: Number(u['target_hole_index'] ?? 0),
+            placement_pixel_x: typeof u['placement_pixel_x'] === 'number' ? u['placement_pixel_x'] : undefined,
+            placement_pixel_y: typeof u['placement_pixel_y'] === 'number' ? u['placement_pixel_y'] : undefined,
+            placement_hint_valid: typeof u['placement_hint_valid'] === 'boolean' ? u['placement_hint_valid'] : undefined,
+            placement_waiting: typeof u['placement_waiting'] === 'boolean' ? u['placement_waiting'] : undefined,
+            placement_after_putt:
+              typeof u['placement_after_putt'] === 'boolean' ? u['placement_after_putt'] : undefined,
           }));
+          const putter: PutterInfo = json.putter
+            ? { x: Number(json.putter.x ?? 0), y: Number(json.putter.y ?? 0), visible: Boolean(json.putter.visible) }
+            : { x: 0, y: 0, visible: false };
+          const putters: PutterInfo[] = Array.isArray(json.putters)
+            ? json.putters.map((p: Record<string, unknown>) => ({
+                x: Number(p['x'] ?? 0),
+                y: Number(p['y'] ?? 0),
+                visible: Boolean(p['visible']),
+              }))
+            : putter.visible ? [putter] : [];
           this.data.set({
             ball: json.ball ?? { x: 0, y: 0, visible: false },
+            putter,
+            putters,
             balls,
             holes: json.holes ?? [],
             users,
@@ -160,6 +194,9 @@ export class TrackingService {
 
   async selectTargetHole(index: number, username: string): Promise<boolean> {
     const sid = await this.ensureSession();
+    // #region agent log
+    const _t0 = Date.now();
+    // #endregion
     try {
       const res = await fetch(`${this.apiBase}/api/target-hole`, {
         method: 'POST',
@@ -170,6 +207,9 @@ export class TrackingService {
         this.currentUsername.set(username);
         this.targetHoleIndex.set(index);
         this.lastPostTime = Date.now();
+        // #region agent log
+        fetch('http://127.0.0.1:7256/ingest/834a85df-ea0a-4acc-9f99-905708475f27',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'3366b0'},body:JSON.stringify({sessionId:'3366b0',location:'tracking.service:selectTargetHole',message:'TARGET-HOLE-POST-OK',data:{hole:index,user:username,latencyMs:Date.now()-_t0},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
+        // #endregion
         try {
           localStorage.setItem(TrackingService.STORAGE_KEY, username);
         } catch {

@@ -40,6 +40,13 @@ public:
 	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "BallToHole|Actors", meta = (AllowAbstract = "false"))
 	AActor* HoleActor = nullptr;
 
+	/**
+	 * Which entry in GolfReceiver->BallsData drives this line (0 = first ball, 1 = second, ...).
+	 * Duplicate this actor in the level for multiple players; set 0 / 1 / ... on each instance.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "BallToHole|Actors", meta = (ClampMin = "0"))
+	int32 AimLineBallSortedIndex = 0;
+
 	/** Number of sample points between ball and hole (including endpoints). Min 2, max 32. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "BallToHole|Trace", meta = (ClampMin = "2", ClampMax = "32"))
 	int32 NumSamplePoints = 16;
