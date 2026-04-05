@@ -31,7 +31,15 @@ struct HolePos {
     int class_id = -1;
     float x = 0.f, y = 0.f, radius = 0.f;
     bool valid = false;
-    int frames_since_seen = 0; 
+    int frames_since_seen = 0;
+};
+
+/// Provisional cup detections; promoted into \ref holes_ after continuous visibility exceeds the confirm threshold.
+struct PendingHole {
+    float x = 0.f, y = 0.f, radius = 0.f;
+    float seconds_visible = 0.f;
+    int frames_lost_streak = 0;
+    bool seen_this_frame = false;
 };
 
 // ─── Tracker ────────────────────────────────────────────────────────────────
@@ -39,7 +47,7 @@ class Tracker {
 public:
     /// @param alpha       EMA smoothing factor (0-1, higher = more responsive)
     /// @param max_lost    frames before a track is considered lost
-    explicit Tracker(float alpha = 0.6f, int max_lost = 15);
+    explicit Tracker(float alpha = 0.6f, int max_lost = 45);
 
     float min_dist_px = 999999.0f;
 
@@ -96,8 +104,9 @@ private:
     TrackedObject empty_ball_;          // invalid fallback for ball()
     TrackedObject putter_;              // best-confidence single putter (legacy/UE)
     std::vector<TrackedObject> putters_; // all putter detections this frame
-    std::vector<HolePos> holes_;   // all holes this frame
-    HolePos hole_pos_;             // primary hole (for PPI / putt-made)
+    std::vector<HolePos> holes_;       // confirmed holes only (see PendingHole)
+    std::vector<PendingHole> pending_holes_;
+    HolePos hole_pos_;                 // primary hole (for PPI / putt-made)
     bool putt_ended_fired_ = false; // prevents repeated "Putt ended" when camera loses/regains ball
     int target_hole_index_ = -1;   // from UI; -1 = auto-select
     float last_primary_x_ = -1.f, last_primary_y_ = -1.f;  // sticky selection: don't switch when new hole appears

@@ -28,6 +28,7 @@ ABallTrailSplineActor::ABallTrailSplineActor()
 void ABallTrailSplineActor::BeginPlay()
 {
 	Super::BeginPlay();
+	LastBallsDataCount = -1;
 	if (!IsValidActorRef(GolfReceiver)) { GolfReceiver = nullptr; }
 	if (!IsValidActorRef(BallActor)) { BallActor = nullptr; }
 	if (!TrailMaterial && bEnableTrail)
@@ -46,15 +47,36 @@ void ABallTrailSplineActor::Tick(float DeltaTime)
 	if (IsTemplate() || !bEnableTrail) return;
 
 	AUDPGolfReceiver* ValidReceiver = (IsValidActorRef(GolfReceiver) && GolfReceiver->GetClass()->IsChildOf(AUDPGolfReceiver::StaticClass())) ? GolfReceiver : nullptr;
+	if (ValidReceiver && ValidReceiver->BallsData.Num() > 0)
+	{
+		const int32 N = ValidReceiver->BallsData.Num();
+		if (LastBallsDataCount >= 0 && N != LastBallsDataCount)
+		{
+			ClearTrail();
+		}
+		LastBallsDataCount = N;
+	}
+	else if (ValidReceiver)
+	{
+		LastBallsDataCount = -1;
+	}
+	// Default to receiver's primary ball only when this trail did not pair to a specific ball actor.
 	AActor* ResolvedBall = BallActor;
-	if (ValidReceiver && IsValidActorRef(ValidReceiver->BallActor))
+	if (ValidReceiver && IsValidActorRef(ValidReceiver->BallActor) && !IsValidActorRef(BallActor))
 	{
 		ResolvedBall = ValidReceiver->BallActor;
 	}
 
 	FVector BallPos = FVector::ZeroVector;
 	bool bBallValid = false;
-	if (ValidReceiver && ValidReceiver->BallData.bVisible)
+	// Paired ball actor: follow its world position (receiver drives it by stable_id). Do not use legacy BallData
+	// (JSON "ball" = tracker balls[0] only) or trails jump when sort order swaps at passings.
+	if (IsValidActorRef(BallActor))
+	{
+		BallPos = BallActor->GetActorLocation();
+		bBallValid = true;
+	}
+	else if (ValidReceiver && ValidReceiver->BallData.bVisible)
 	{
 		BallPos = ValidReceiver->PixelToWorld(ValidReceiver->BallData.X, ValidReceiver->BallData.Y);
 		bBallValid = true;
@@ -94,8 +116,15 @@ void ABallTrailSplineActor::Tick(float DeltaTime)
 			ClearTrail();
 			LastPuttNumber = CurrentPutt;
 		}
-		bWasInMotion = true;
 		StoppedElapsedSeconds = 0.f;
+		if (TrailPoints.Num() > 0)
+		{
+			const float Jump = (BallPos - TrailPoints.Last()).Size();
+			if (Jump > TeleportClearThreshold)
+			{
+				ClearTrail();
+			}
+		}
 		if (TrailPoints.Num() == 0 || (BallPos - TrailPoints.Last()).SizeSquared() > FMath::Square(SampleDistanceThreshold))
 		{
 			TrailPoints.Add(BallPos);
@@ -104,6 +133,7 @@ void ABallTrailSplineActor::Tick(float DeltaTime)
 				TrailPoints.RemoveAt(0);
 			}
 		}
+		bWasInMotion = true;
 		RebuildSplineMeshes();
 		return;
 	}

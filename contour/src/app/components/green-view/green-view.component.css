@@ -105,6 +105,10 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+.green-svg line.aim-line {
+  pointer-events: none;
+}
+
 .hole-group circle:first-child {
   pointer-events: none;
 }
@@ -142,7 +146,7 @@
   paint-order: stroke;
   stroke: #222;
   stroke-width: 2px;
-  pointer-events: none;
+  cursor: pointer;
   font-style: italic;
 }
 
@@ -167,6 +171,23 @@
 
 .putter-indicator line {
   filter: drop-shadow(0 0 2px rgba(255, 107, 107, 0.6));
+}
+
+.place-ball-marker {
+  cursor: pointer;
+}
+
+.place-ball-marker-ring {
+  pointer-events: none;
+}
+
+.place-ball-marker-label {
+  font-size: 10px;
+  fill: #a8e063;
+  paint-order: stroke;
+  stroke: #1a2a12;
+  stroke-width: 3px;
+  pointer-events: none;
 }
 
 .placement-hint {

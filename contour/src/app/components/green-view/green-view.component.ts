@@ -75,52 +75,93 @@ export class GreenViewComponent implements OnInit, OnDestroy {
   /** When >= 0, show username picker for ball claim */
   pickerBallIndex = signal<number>(-1);
 
-  /** Username of ball selected via putter hover */
-  selectedBallUsername = signal<string | null>(null);
+  /** Ball index selected for hole aiming (putter hover or tap). */
+  selectedBallIndex = signal<number>(-1);
 
-  /** Pixel radius for putter-to-ball proximity (camera pixels) */
-  private static readonly PUTTER_BALL_RADIUS = 60;
-  /** Max distance from vanished putter to preview hole for selection to trigger */
-  private static readonly VANISH_HOLE_RADIUS = 200;
-  /** Consecutive frames a putter must hover over a ball before selecting it */
-  private static readonly HOVER_FRAMES = 4;
+  /** Putter must be this close (px) to ball center to count as "hovering" for selection. */
+  private static readonly PUTTER_BALL_RADIUS = 40;
+  /** Frames (~100ms each) putter must stay within radius before auto-select (reduces stroke false positives). */
+  private static readonly HOVER_FRAMES = 8;
 
   private putterBallHoverFrames = 0;
   private putterBallHoverIndex = -1;
+  /** Last frame: balls that had a putter within PUTTER_BALL_RADIUS (for occlusion auto-select). */
+  private prevBallsNearPutter: { index: number; x: number; y: number }[] = [];
+
+  /** Max distance from vanished putter to preview hole for selection to trigger */
+  private static readonly VANISH_HOLE_RADIUS = 200;
+  /**
+   * If a ghost track is this close to any visible ball, hide "Place ball here" — detector
+   * often emits a new visible track while the old ghost remains (same physical ball).
+   */
+  private static readonly PLACE_MARKER_SUPPRESS_NEAR_VISIBLE_PX = 140;
+
   /** Last frame's putter positions (for detecting vanish events) */
   private prevPutterPositions: {x: number; y: number}[] = [];
-  /** Claimed balls that were near a putter last frame (for occlusion-based selection) */
-  private prevBallsNearPutter: {index: number; username: string; x: number; y: number}[] = [];
   private holeSelectCooldownUntil = 0;
   private currentPreviewHole = -1;
 
-  /** Distinct colors for user aim lines (per-username) */
+  /** Distinct colors per ball label for aim lines. First color is not #ff6b6b (putter crosshair). */
   private static readonly USER_COLORS = [
-    '#ff6b6b', '#ffd93d', '#6bcbff', '#a8e063', '#ff6b9d', '#ff9f43',
-    '#54a0ff', '#00d2d3', '#a55eea', '#ffc107', '#ff7f50', '#00fa9a',
+    '#6bcbff', '#ffd93d', '#a8e063', '#ff6b9d', '#ff9f43', '#54a0ff',
+    '#00d2d3', '#a55eea', '#ffc107', '#ff7f50', '#00fa9a', '#ff6b6b',
   ];
 
-  getUserColor(username: string): string {
+  getUserColor(key: string): string {
     let h = 0;
-    for (let i = 0; i < username.length; i++) {
-      h = (h << 5) - h + username.charCodeAt(i);
+    for (let i = 0; i < key.length; i++) {
+      h = (h << 5) - h + key.charCodeAt(i);
       h |= 0;
     }
     return GreenViewComponent.USER_COLORS[Math.abs(h) % GreenViewComponent.USER_COLORS.length];
   }
 
-  /** Balls with username and valid target hole for drawing aim lines */
+  getBallColor(ball: {username?: string; index: number}): string {
+    return this.getUserColor(ball.username?.trim() || `Ball ${ball.index}`);
+  }
+
+  /** Balls with a valid target hole for drawing aim lines (only when the ball is actually on-screen) */
   readonly ballsWithTarget = computed(() => {
     const balls = this.balls();
     const holes = this.holes();
     return balls.filter(
       (b) =>
-        (b.visible || !!b.username?.trim()) &&
-        b.username?.trim() &&
+        b.visible &&
         typeof b.target_hole_index === 'number' &&
         b.target_hole_index >= 0 &&
         b.target_hole_index < holes.length,
     );
+  });
+
+  /** Ghost tracks that should still show the reclaim marker (not redundant with a visible ball nearby). */
+  readonly placeMarkerBallIndices = computed(() => {
+    const balls = this.balls();
+    const visible = balls.filter((b) => b.visible);
+    const r2 = GreenViewComponent.PLACE_MARKER_SUPPRESS_NEAR_VISIBLE_PX ** 2;
+    const set = new Set<number>();
+    for (const b of balls) {
+      if (b.visible || b.username?.trim()) continue;
+      let suppressed = false;
+      for (const v of visible) {
+        const dx = v.x - b.x;
+        const dy = v.y - b.y;
+        if (dx * dx + dy * dy < r2) {
+          suppressed = true;
+          break;
+        }
+      }
+      if (!suppressed) set.add(b.index);
+    }
+    return set;
+  });
+
+  /** Display label for the currently selected ball ("alice" or "Ball 2") */
+  readonly selectedBallLabel = computed(() => {
+    const idx = this.selectedBallIndex();
+    if (idx < 0) return null;
+    const ball = this.balls().find(b => b.index === idx);
+    if (!ball) return null;
+    return ball.username?.trim() || `Ball ${idx}`;
   });
 
   /** Live preview: which hole will be selected if putter disappears now (-1 if none) */
@@ -129,6 +170,10 @@ export class GreenViewComponent implements OnInit, OnDestroy {
   constructor() {
     effect(() => {
       this.onTrackingUpdate();
+    });
+    effect(() => {
+      const idx = this.selectedBallIndex();
+      void this.tracking.setHoleAimBallIndex(idx);
     });
   }
 
@@ -144,11 +189,16 @@ export class GreenViewComponent implements OnInit, OnDestroy {
     return Math.max(r, 22);
   }
 
-  onBallClick(ballIndex: number): void {
-    const ball = this.balls().find((b) => b.index === ballIndex);
-    if (!ball?.username?.trim()) {
-      this.pickerBallIndex.set(ballIndex);
-    }
+  /** Tap ball body / marker to toggle selection for hole aiming. */
+  onBallSelectForHole(ballIndex: number, event?: Event): void {
+    event?.stopPropagation();
+    this.selectedBallIndex.update((s) => (s === ballIndex ? -1 : ballIndex));
+  }
+
+  /** Tap "Claim this ball" only — avoids accidental selection while holding the putter near the ball. */
+  onOpenClaimPicker(ballIndex: number, event: Event): void {
+    event.stopPropagation();
+    this.pickerBallIndex.set(ballIndex);
   }
 
   cancelPicker(): void {
@@ -192,11 +242,10 @@ export class GreenViewComponent implements OnInit, OnDestroy {
     if (!d) return;
     const pts = d.putters;
     const anyVisible = pts.length > 0;
-    const selected = this.selectedBallUsername();
+    const selected = this.selectedBallIndex();
 
     // Detect vanished putters: only when the putter count actually decreased.
-    // Without this guard, a putter moving >100px between frames triggers a false vanish.
-    if (selected && pts.length < this.prevPutterPositions.length && Date.now() > this.holeSelectCooldownUntil && this.currentPreviewHole >= 0) {
+    if (selected >= 0 && pts.length < this.prevPutterPositions.length && Date.now() > this.holeSelectCooldownUntil && this.currentPreviewHole >= 0) {
       const matchDist2 = 100 * 100;
       for (const prev of this.prevPutterPositions) {
         let matched = false;
@@ -206,7 +255,6 @@ export class GreenViewComponent implements OnInit, OnDestroy {
           if (dx * dx + dy * dy < matchDist2) { matched = true; break; }
         }
         if (!matched) {
-          // This putter vanished — check if it was near the preview hole
           const previewHole = d.holes[this.currentPreviewHole];
           if (previewHole) {
             const dx = prev.x - previewHole.x;
@@ -215,12 +263,11 @@ export class GreenViewComponent implements OnInit, OnDestroy {
             if (d2 < GreenViewComponent.VANISH_HOLE_RADIUS ** 2) {
               const holeIdx = this.currentPreviewHole;
               this.holeSelectCooldownUntil = Date.now() + 3000;
-              this.selectedBallUsername.set(null);
+              this.selectedBallIndex.set(-1);
               this.currentPreviewHole = -1;
               this.previewHoleIndex.set(-1);
-              this.putterBallHoverFrames = 0;
-              this.putterBallHoverIndex = -1;
-              this.tracking.selectTargetHole(holeIdx, selected);
+              const selBall = d.balls.find(b => b.index === selected);
+              this.tracking.selectTargetHoleForBall(holeIdx, selected, selBall?.username?.trim());
               break;
             }
           }
@@ -232,10 +279,10 @@ export class GreenViewComponent implements OnInit, OnDestroy {
     this.prevPutterPositions = pts.map(p => ({x: p.x, y: p.y}));
 
     // Re-read selected (may have been cleared by vanish handler above)
-    const sel = this.selectedBallUsername();
+    const sel = this.selectedBallIndex();
 
     // Update preview ring: find the hole nearest to ANY visible putter (with hysteresis)
-    if (sel && anyVisible) {
+    if (sel >= 0 && anyVisible) {
       let bestHoleIdx = -1;
       let bestHoleD2 = Infinity;
       for (const p of pts) {
@@ -267,29 +314,27 @@ export class GreenViewComponent implements OnInit, OnDestroy {
     }
 
     if (!anyVisible || Date.now() < this.holeSelectCooldownUntil) {
-      this.putterBallHoverFrames = 0;
-      this.putterBallHoverIndex = -1;
-      this.prevBallsNearPutter = [];
       return;
     }
 
-    // Ball-vanish selection: if a claimed ball was near a putter last frame and is
-    // now not visible (occluded by putter), select it immediately. A putter must
-    // still be near the ball's last position (filters out putts where the putter
-    // swings through quickly).
-    if (!sel) {
-      const vanishR2 = GreenViewComponent.PUTTER_BALL_RADIUS ** 2;
+    const r2 = GreenViewComponent.PUTTER_BALL_RADIUS ** 2;
+
+    // Occlusion: ball was next to putter last frame and is now invisible — select that ball.
+    if (sel < 0) {
       for (const prev of this.prevBallsNearPutter) {
-        const ball = d.balls.find(b => b.index === prev.index);
+        const ball = d.balls.find((b) => b.index === prev.index);
         if (!ball || ball.visible) continue;
         let putterNearby = false;
         for (const p of pts) {
           const dx = p.x - prev.x;
           const dy = p.y - prev.y;
-          if (dx * dx + dy * dy < vanishR2) { putterNearby = true; break; }
+          if (dx * dx + dy * dy < r2) {
+            putterNearby = true;
+            break;
+          }
         }
         if (putterNearby) {
-          this.selectedBallUsername.set(prev.username);
+          this.selectedBallIndex.set(prev.index);
           this.putterBallHoverFrames = 0;
           this.putterBallHoverIndex = -1;
           break;
@@ -297,23 +342,21 @@ export class GreenViewComponent implements OnInit, OnDestroy {
       }
     }
 
-    // Ball selection: check if ANY putter is near a claimed ball (closest pair wins)
-    const selAfterVanish = this.selectedBallUsername();
+    const selAfterVanish = this.selectedBallIndex();
     let nearestBallIdx = -1;
-    let nearestBallD2 = GreenViewComponent.PUTTER_BALL_RADIUS ** 2;
-    const nextBallsNearPutter: {index: number; username: string; x: number; y: number}[] = [];
+    let nearestBallD2 = r2;
+    const nextBallsNearPutter: { index: number; x: number; y: number }[] = [];
+
     for (const b of d.balls) {
       if (!b.visible) continue;
-      const name = b.username?.trim();
-      if (!name) continue;
       let nearPutter = false;
       for (const p of pts) {
         const dx = p.x - b.x;
         const dy = p.y - b.y;
         const d2 = dx * dx + dy * dy;
-        if (d2 < GreenViewComponent.PUTTER_BALL_RADIUS ** 2) {
+        if (d2 < r2) {
           nearPutter = true;
-          if (!selAfterVanish || name !== selAfterVanish) {
+          if (selAfterVanish < 0 || b.index !== selAfterVanish) {
             if (d2 < nearestBallD2) {
               nearestBallD2 = d2;
               nearestBallIdx = b.index;
@@ -322,7 +365,7 @@ export class GreenViewComponent implements OnInit, OnDestroy {
         }
       }
       if (nearPutter) {
-        nextBallsNearPutter.push({index: b.index, username: name, x: b.x, y: b.y});
+        nextBallsNearPutter.push({ index: b.index, x: b.x, y: b.y });
       }
     }
     this.prevBallsNearPutter = nextBallsNearPutter;
@@ -335,10 +378,7 @@ export class GreenViewComponent implements OnInit, OnDestroy {
         this.putterBallHoverFrames = 1;
       }
       if (this.putterBallHoverFrames >= GreenViewComponent.HOVER_FRAMES) {
-        const ball = d.balls.find((b) => b.index === nearestBallIdx);
-        if (ball?.username?.trim()) {
-          this.selectedBallUsername.set(ball.username.trim());
-        }
+        this.selectedBallIndex.set(nearestBallIdx);
         this.putterBallHoverFrames = 0;
       }
     } else {

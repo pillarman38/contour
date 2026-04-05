@@ -8,7 +8,8 @@
 // {
 //   "timestamp_ms": <uint64>,
 //   "ball": { "x": <f>, "y": <f>, "vx": <f>, "vy": <f>, "conf": <f>, "visible": <bool> },
-//   "putter": { "x": <f>, "y": <f>, "vx": <f>, "vy": <f>, "conf": <f>, "visible": <bool> }
+//   "putter": { "x": <f>, "y": <f>, "vx": <f>, "vy": <f>, "conf": <f>, "visible": <bool> },
+//   "putters": [ { same fields as putter }, ... ],
 //   "holes": [ { "x": <f>, "y": <f>, "radius": <f>, "visible": <bool> }, ... ],
 //   "balls": [ { "x": <f>, ... "stable_id": <int>, "username": "...", ... }, ... ],
 //   "ball_placements": [ { "username": "...", "stable_id": <int>, "pixel_x": <f>, "pixel_y": <f>, "waiting": <bool>, "after_putt": <bool> }, ... ]
@@ -81,14 +82,20 @@ public:
 
     /// Send the current tracker state + putt stats as a JSON datagram.
     /// @param balls  all balls with username and stats (empty = use single-ball legacy)
+    /// @param putters_all  all putter detections (JSON field \c putters); may be empty
     /// @param target_hole_index  hole index for ball-to-hole line (-1 = use 0)
     /// @param placement_hints  per-claimed-user return spots (JSON field ball_placements)
+    /// @param hole_aim_ball_index_set  if false, \c hole_aim_ball_index is omitted from JSON (Unreal legacy crosshair).
+    /// @param hole_aim_ball_index  stable ball id while Contour selects a hole (-1 = not aiming)
     bool send(const std::vector<BallPayload>& balls,
               const TrackedObject& putter,
+              const std::vector<TrackedObject>& putters_all,
               const std::vector<HolePos>& holes,
               int target_hole_index = 0,
               float target_hole_x = 0.f, float target_hole_y = 0.f,
-              const std::vector<BallPlacementHint>& placement_hints = {});
+              const std::vector<BallPlacementHint>& placement_hints = {},
+              bool hole_aim_ball_index_set = false,
+              int hole_aim_ball_index = -1);
 
     /// Legacy single-ball send (delegates to multi-ball with one entry).
     bool send(const TrackedObject& ball, const TrackedObject& putter,

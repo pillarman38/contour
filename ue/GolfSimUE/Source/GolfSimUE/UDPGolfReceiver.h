@@ -174,6 +174,10 @@ struct FGolfUDPPayload
 	UPROPERTY(BlueprintReadOnly, Category = "Golf|Payload")
 	FGolfTrackedObject Putter;
 
+	/** All putter detections this frame (same order as tracker; use for multi crosshair). */
+	UPROPERTY(BlueprintReadOnly, Category = "Golf|Payload")
+	TArray<FGolfTrackedObject> Putters;
+
 	/** First hole (backward compat). Same as Holes[0] when Holes.Num() > 0. */
 	UPROPERTY(BlueprintReadOnly, Category = "Golf|Payload")
 	FGolfHoleInfo Hole;
@@ -209,6 +213,10 @@ struct FGolfUDPPayload
 
 	UPROPERTY(BlueprintReadOnly, Category = "Golf|Payload")
 	int64 TimestampMs = 0;
+
+	/** Stable ball id while Contour user selects a hole (-1 = hide). INT32_MAX when UDP omits field (legacy: show crosshair). */
+	UPROPERTY(BlueprintReadOnly, Category = "Golf|Payload")
+	int32 HoleAimBallIndex = 2147483647;
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnPuttMade);
@@ -241,6 +249,21 @@ public:
 
 	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "Golf|Actors", meta = (AllowAbstract = "false"))
 	AActor* PutterActor = nullptr;
+
+	/**
+	 * Template actor for per-putter crosshairs (e.g. your crosshair_Blueprint placed in the level).
+	 * When bAutoSpawnPutterCrosshairs is true, one instance per entry in PuttersData is spawned from this class.
+	 */
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "Golf|Actors", meta = (AllowAbstract = "false"))
+	AActor* PutterCrosshairTemplate = nullptr;
+
+	/** When true, spawn/move PutterCrosshairActorsSpawned to match PuttersData (Contour-style multi putter). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Golf|Actors")
+	bool bAutoSpawnPutterCrosshairs = true;
+
+	/** Runtime-spawned crosshair actors (same count as PuttersData when auto-spawn is on). */
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "Golf|Actors")
+	TArray<AActor*> PutterCrosshairActorsSpawned;
 
 	/** Single hole actor (backward compat). Moved to first hole when set. */
 	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "Golf|Actors", meta = (AllowAbstract = "false"))
@@ -305,6 +328,10 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Golf|Data")
 	FGolfTrackedObject PutterData;
 
+	/** All putters this frame (mirrors last payload); drives multi crosshair when bAutoSpawnPutterCrosshairs. */
+	UPROPERTY(BlueprintReadOnly, Category = "Golf|Data")
+	TArray<FGolfTrackedObject> PuttersData;
+
 	/** First hole (same as Holes[0] when Holes.Num() > 0). */
 	UPROPERTY(BlueprintReadOnly, Category = "Golf|Data")
 	FGolfHoleInfo HoleData;
@@ -330,6 +357,10 @@ public:
 
 	UPROPERTY(BlueprintReadOnly, Category = "Golf|Data")
 	float TargetHoleY = 0.f;
+
+	/** Mirrors UDP payload; INT32_MAX = field omitted (legacy show crosshair). */
+	UPROPERTY(BlueprintReadOnly, Category = "Golf|Data")
+	int32 HoleAimBallIndex = 2147483647;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Golf|Data")
 	FGolfPuttStats PuttStats;
@@ -455,4 +486,11 @@ private:
 
 	/** World time when we last received a valid UDP packet. Used for staleness check (markers fade when tracker stops). */
 	double LastUDPReceiveTime = 0.0;
+
+	/**
+	 * Per visual ball slot: primary BallActor = 0, BallActors[i] = i+1. Tracker stable_id to follow.
+	 * UDP balls[] are sorted by (x,y) each frame; slot index must not be confused with sorted index or actors swap when balls cross.
+	 */
+	UPROPERTY(Transient)
+	TArray<int32> BallActorLatchedStableIds;
 };

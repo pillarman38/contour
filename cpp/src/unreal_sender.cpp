@@ -60,10 +60,13 @@ static void escape_json_str(std::string& out, const std::string& s) {
 
 bool UnrealSender::send(const std::vector<BallPayload>& balls,
                         const TrackedObject& putter,
+                        const std::vector<TrackedObject>& putters_all,
                         const std::vector<HolePos>& holes,
                         int target_hole_index,
                         float target_hole_x, float target_hole_y,
-                        const std::vector<BallPlacementHint>& placement_hints) {
+                        const std::vector<BallPlacementHint>& placement_hints,
+                        bool hole_aim_ball_index_set,
+                        int hole_aim_ball_index) {
     if (sock_fd_ == invalid_socket) return false;
 
     auto now = std::chrono::steady_clock::now();
@@ -124,7 +127,16 @@ bool UnrealSender::send(const std::vector<BallPayload>& balls,
         putter.x, putter.y, putter.vx, putter.vy,
         putter.confidence, putter.valid ? "true" : "false");
     buf += tmp;
-    buf += ",\"holes\":[";
+    buf += ",\"putters\":[";
+    for (size_t i = 0; i < putters_all.size(); ++i) {
+        if (i > 0) buf += ",";
+        const auto& p = putters_all[i];
+        std::snprintf(tmp, sizeof(tmp),
+            "{\"x\":%.2f,\"y\":%.2f,\"vx\":%.2f,\"vy\":%.2f,\"conf\":%.3f,\"visible\":%s}",
+            p.x, p.y, p.vx, p.vy, p.confidence, p.valid ? "true" : "false");
+        buf += tmp;
+    }
+    buf += "],\"holes\":[";
     for (size_t i = 0; i < holes.size(); ++i) {
         if (i > 0) buf += ",";
         std::snprintf(tmp, sizeof(tmp),
@@ -148,6 +160,10 @@ bool UnrealSender::send(const std::vector<BallPayload>& balls,
         buf += tmp;
     }
     buf += "]";
+    if (hole_aim_ball_index_set) {
+        buf += ",\"hole_aim_ball_index\":";
+        buf += std::to_string(hole_aim_ball_index);
+    }
     int ti = (target_hole_index >= 0 && static_cast<size_t>(target_hole_index) < holes.size())
              ? target_hole_index : 0;
     std::snprintf(tmp, sizeof(tmp),
@@ -196,7 +212,7 @@ bool UnrealSender::send(const TrackedObject& ball, const TrackedObject& putter,
     bp.stats = stats;
     bp.is_putt_made = is_putt_made;
     std::vector<BallPayload> balls = { bp };
-    return send(balls, putter, holes, target_hole_index, target_hole_x, target_hole_y);
+    return send(balls, putter, {}, holes, target_hole_index, target_hole_x, target_hole_y, {}, false, -1);
 }
 
 void UnrealSender::close() {

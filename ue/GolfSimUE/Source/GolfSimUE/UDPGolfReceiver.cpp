@@ -8,17 +8,93 @@
 #include "UObject/ObjectSaveContext.h"
 #include "UObject/UnrealType.h"
 #include "Dom/JsonObject.h"
-#include "HAL/PlatformFileManager.h"
 #include "IPAddress.h"
-#include "Misc/Paths.h"
-#include "Misc/FileHelper.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "SocketSubsystem.h"
 #include "Sockets.h"
 #include "Components/TextRenderComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Containers/Set.h"
+#include "HAL/PlatformFileManager.h"
+#include "Misc/Paths.h"
+#include "Containers/StringConv.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogGolfUDP, Log, All);
+
+// #region agent log (debug a3d342)
+static void AgentDebugBallPoolLog(
+	int32 PoolNeedBalls,
+	int32 BallsDataNum,
+	int32 VisibleBalls,
+	int32 NumExtraBallActors,
+	int32 MaxExtraAllowed,
+	int32 TrimmedCount)
+{
+	static double LastT = 0.;
+	const double Now = FPlatformTime::Seconds();
+	if (Now - LastT < 0.4)
+	{
+		return;
+	}
+	LastT = Now;
+	const FString Path = FPaths::ConvertRelativePathToFull(
+		FPaths::Combine(FPaths::ProjectDir(), TEXT("../../debug-a3d342.log")));
+	const FString Line = FString::Printf(
+		TEXT("{\"sessionId\":\"a3d342\",\"hypothesisId\":\"H1_H2\",\"location\":\"UDPGolfReceiver::Tick\",\"message\":\"ball_actor_pool\",\"data\":{\"poolNeedBalls\":%d,\"ballsDataNum\":%d,\"visibleBalls\":%d,\"extraBallActors\":%d,\"maxExtraAllowed\":%d,\"trimmed\":%d},\"timestamp\":%lld}\n"),
+		PoolNeedBalls,
+		BallsDataNum,
+		VisibleBalls,
+		NumExtraBallActors,
+		MaxExtraAllowed,
+		TrimmedCount,
+		(int64)(FDateTime::UtcNow().GetTicks() / ETimespan::TicksPerMillisecond));
+	IPlatformFile& PF = FPlatformFileManager::Get().GetPlatformFile();
+	if (IFileHandle* Handle = PF.OpenWrite(*Path, true))
+	{
+		FTCHARToUTF8 Utf8(*Line);
+		Handle->Write(reinterpret_cast<const uint8*>(Utf8.Get()), static_cast<int32>(Utf8.Length()));
+		delete Handle;
+	}
+}
+// #endregion agent log
+
+/** Blueprint meshes are often Static; UDP-driven actors must be Movable or transforms do not apply correctly. */
+static void EnsureUdpDrivenActorMovable(AActor* A)
+{
+	if (!A || !IsValid(A) || A->IsTemplate()) return;
+	if (USceneComponent* Root = A->GetRootComponent())
+	{
+		if (Root->Mobility != EComponentMobility::Movable)
+		{
+			Root->SetMobility(EComponentMobility::Movable);
+		}
+	}
+	A->ForEachComponent<UStaticMeshComponent>(false, [](UStaticMeshComponent* SM)
+	{
+		if (SM && SM->Mobility != EComponentMobility::Movable)
+		{
+			SM->SetMobility(EComponentMobility::Movable);
+		}
+	});
+}
+
+/** Sorted row in BallsData for this stable_id, or INDEX_NONE (no sorted-index fallback — that re-binds slots when balls cross). */
+static int32 FindRowByStableIdOnly(const TArray<FGolfBallInfo>& Balls, int32 StableId)
+{
+	if (StableId < 0)
+	{
+		return INDEX_NONE;
+	}
+	for (int32 i = 0; i < Balls.Num(); ++i)
+	{
+		if (Balls[i].StableId == StableId)
+		{
+			return i;
+		}
+	}
+	return INDEX_NONE;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 AUDPGolfReceiver::AUDPGolfReceiver()
@@ -50,6 +126,7 @@ void AUDPGolfReceiver::Serialize(FArchive& Ar)
 		if (!IsValidActorRef(HoleActor)) { HoleActor = nullptr; }
 		if (!IsValidActorRef(AimLineActor)) { AimLineActor = nullptr; }
 		if (!IsValidActorRef(PlacementMarkerActor)) { PlacementMarkerActor = nullptr; }
+		if (!IsValidActorRef(PutterCrosshairTemplate)) { PutterCrosshairTemplate = nullptr; }
 		for (int32 i = HoleActors.Num() - 1; i >= 0; --i)
 		{
 			if (!IsValidActorRef(HoleActors[i])) { HoleActors.RemoveAt(i); }
@@ -66,6 +143,10 @@ void AUDPGolfReceiver::Serialize(FArchive& Ar)
 		{
 			if (!IsValidActorRef(PlacementMarkerActorsSpawned[i])) { PlacementMarkerActorsSpawned.RemoveAt(i); }
 		}
+		for (int32 i = PutterCrosshairActorsSpawned.Num() - 1; i >= 0; --i)
+		{
+			if (!IsValidActorRef(PutterCrosshairActorsSpawned[i])) { PutterCrosshairActorsSpawned.RemoveAt(i); }
+		}
 	}
 }
 
@@ -77,6 +158,7 @@ void AUDPGolfReceiver::PostLoad()
 	if (!IsValidActorRef(PutterActor)) { PutterActor = nullptr; }
 	if (!IsValidActorRef(HoleActor)) { HoleActor = nullptr; }
 	if (!IsValidActorRef(PlacementMarkerActor)) { PlacementMarkerActor = nullptr; }
+	if (!IsValidActorRef(PutterCrosshairTemplate)) { PutterCrosshairTemplate = nullptr; }
 	for (int32 i = HoleActors.Num() - 1; i >= 0; --i)
 	{
 		if (!IsValidActorRef(HoleActors[i])) { HoleActors.RemoveAt(i); }
@@ -96,6 +178,7 @@ void AUDPGolfReceiver::PreSave(FObjectPreSaveContext SaveContext)
 		if (!IsValidActorRef(PutterActor)) { PutterActor = nullptr; }
 		if (!IsValidActorRef(HoleActor)) { HoleActor = nullptr; }
 		if (!IsValidActorRef(PlacementMarkerActor)) { PlacementMarkerActor = nullptr; }
+		if (!IsValidActorRef(PutterCrosshairTemplate)) { PutterCrosshairTemplate = nullptr; }
 		for (int32 i = HoleActors.Num() - 1; i >= 0; --i)
 		{
 			if (!IsValidActorRef(HoleActors[i])) { HoleActors.RemoveAt(i); }
@@ -110,6 +193,7 @@ void AUDPGolfReceiver::PostDuplicate(EDuplicateMode::Type DuplicateMode)
 	if (!IsValidActorRef(PutterActor)) { PutterActor = nullptr; }
 	if (!IsValidActorRef(HoleActor)) { HoleActor = nullptr; }
 	if (!IsValidActorRef(PlacementMarkerActor)) { PlacementMarkerActor = nullptr; }
+	if (!IsValidActorRef(PutterCrosshairTemplate)) { PutterCrosshairTemplate = nullptr; }
 	for (int32 i = HoleActors.Num() - 1; i >= 0; --i)
 	{
 		if (!IsValidActorRef(HoleActors[i])) { HoleActors.RemoveAt(i); }
@@ -128,6 +212,7 @@ void AUDPGolfReceiver::PostEditChangeProperty(FPropertyChangedEvent& PropertyCha
 	if (!IsValidActorRef(PutterActor)) { PutterActor = nullptr; }
 	if (!IsValidActorRef(HoleActor)) { HoleActor = nullptr; }
 	if (!IsValidActorRef(PlacementMarkerActor)) { PlacementMarkerActor = nullptr; }
+	if (!IsValidActorRef(PutterCrosshairTemplate)) { PutterCrosshairTemplate = nullptr; }
 	for (int32 i = HoleActors.Num() - 1; i >= 0; --i)
 	{
 		if (!IsValidActorRef(HoleActors[i])) { HoleActors.RemoveAt(i); }
@@ -148,6 +233,7 @@ void AUDPGolfReceiver::PostInitializeComponents()
 		if (!IsValidActorRef(PutterActor)) { PutterActor = nullptr; }
 		if (!IsValidActorRef(HoleActor)) { HoleActor = nullptr; }
 		if (!IsValidActorRef(PlacementMarkerActor)) { PlacementMarkerActor = nullptr; }
+		if (!IsValidActorRef(PutterCrosshairTemplate)) { PutterCrosshairTemplate = nullptr; }
 		for (int32 i = HoleActors.Num() - 1; i >= 0; --i)
 		{
 			if (!IsValidActorRef(HoleActors[i])) { HoleActors.RemoveAt(i); }
@@ -162,10 +248,12 @@ void AUDPGolfReceiver::PostInitializeComponents()
 void AUDPGolfReceiver::BeginPlay()
 {
 	Super::BeginPlay();
+	BallActorLatchedStableIds.Reset();
 	if (!IsValidActorRef(BallActor)) { BallActor = nullptr; }
 	if (!IsValidActorRef(PutterActor)) { PutterActor = nullptr; }
 	if (!IsValidActorRef(HoleActor)) { HoleActor = nullptr; }
 	if (!IsValidActorRef(PlacementMarkerActor)) { PlacementMarkerActor = nullptr; }
+	if (!IsValidActorRef(PutterCrosshairTemplate)) { PutterCrosshairTemplate = nullptr; }
 	for (int32 i = HoleActors.Num() - 1; i >= 0; --i)
 	{
 		if (!IsValidActorRef(HoleActors[i])) { HoleActors.RemoveAt(i); }
@@ -197,6 +285,7 @@ void AUDPGolfReceiver::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		}
 	}
 	BallActors.Empty();
+	BallActorLatchedStableIds.Reset();
 	for (ABallToHoleLineActor* L : AimLineActorsSpawned)
 	{
 		if (IsValid(L) && !L->IsTemplate())
@@ -213,6 +302,14 @@ void AUDPGolfReceiver::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		}
 	}
 	PlacementMarkerActorsSpawned.Empty();
+	for (AActor* C : PutterCrosshairActorsSpawned)
+	{
+		if (IsValid(C) && !C->IsTemplate())
+		{
+			C->Destroy();
+		}
+	}
+	PutterCrosshairActorsSpawned.Empty();
 	StopReceiver();
 	Super::EndPlay(EndPlayReason);
 }
@@ -236,6 +333,17 @@ FGolfUDPPayload AUDPGolfReceiver::GetLastPayloadFromActor(UObject* ActorOrObject
 		return Receiver->GetLastPayload();
 	}
 	return FGolfUDPPayload();
+}
+
+/** Second line for ball labels (same values as former PuttMarkerActor L/P/D line). */
+static FString BallStatsLineForLabel(const FGolfPuttStats& S)
+{
+	if (!S.State.Equals(TEXT("in_motion"), ESearchCase::IgnoreCase) &&
+		!S.State.Equals(TEXT("stopped"), ESearchCase::IgnoreCase))
+	{
+		return FString();
+	}
+	return FString::Printf(TEXT("L:%.1f P:%.1f D:%.1f"), S.LaunchSpeed, S.PeakSpeed, S.TotalDistance);
 }
 
 FText AUDPGolfReceiver::PuttStatsToText(const FGolfPuttStats& Stats)
@@ -265,7 +373,21 @@ FText AUDPGolfReceiver::BallLabelToText(const FString& Username, int32 PuttNumbe
 
 FText AUDPGolfReceiver::GetPrimaryBallLabel() const
 {
-	return BallLabelToText(PrimaryUsername, PuttStats.PuttNumber);
+	const FString StatsLine = BallStatsLineForLabel(PuttStats);
+	if (PrimaryUsername.IsEmpty())
+	{
+		if (StatsLine.IsEmpty())
+		{
+			return FText::FromString(TEXT("Claim this ball"));
+		}
+		return FText::FromString(FString::Printf(TEXT("Claim this ball\n%s"), *StatsLine));
+	}
+	FString Top = FString::Printf(TEXT("%s - Putt #%d"), *PrimaryUsername, PuttStats.PuttNumber);
+	if (!StatsLine.IsEmpty())
+	{
+		Top += FString::Printf(TEXT("\n%s"), *StatsLine);
+	}
+	return FText::FromString(Top);
 }
 
 FText AUDPGolfReceiver::GetBallLabelForSortedIndex(int32 SortedIndex) const
@@ -275,13 +397,26 @@ FText AUDPGolfReceiver::GetBallLabelForSortedIndex(int32 SortedIndex) const
 		return FText::GetEmpty();
 	}
 	const FGolfBallInfo& Ball = BallsData[SortedIndex];
+	FString StatsLine = BallStatsLineForLabel(Ball.Stats);
+	// Sender historically only filled stats on balls[0]; root "stats" still has session putt metrics.
+	if (StatsLine.IsEmpty())
+	{
+		StatsLine = BallStatsLineForLabel(PuttStats);
+	}
 	if (Ball.Username.IsEmpty())
 	{
-		return FText::FromString(FString::Printf(
-			TEXT("Claim this ball\nPutt #%d  Peak: %.1f in/s  Dist: %.1f"),
-			Ball.Stats.PuttNumber, Ball.Stats.PeakSpeed, Ball.Stats.TotalDistance));
+		if (StatsLine.IsEmpty())
+		{
+			return FText::FromString(TEXT("Claim this ball"));
+		}
+		return FText::FromString(FString::Printf(TEXT("Claim this ball\n%s"), *StatsLine));
 	}
-	return BallLabelToText(Ball.Username, PuttStats.PuttNumber);
+	FString Top = FString::Printf(TEXT("%s - Putt #%d"), *Ball.Username, Ball.Stats.PuttNumber);
+	if (!StatsLine.IsEmpty())
+	{
+		Top += FString::Printf(TEXT("\n%s"), *StatsLine);
+	}
+	return FText::FromString(Top);
 }
 
 FText AUDPGolfReceiver::PeakSpeedToText(const FGolfPuttStats& Stats)
@@ -432,6 +567,11 @@ bool AUDPGolfReceiver::ParsePayload(const FString& Json, FGolfUDPPayload& Out) c
 
 	Out.TimestampMs = static_cast<int64>(Root->GetNumberField(TEXT("timestamp_ms")));
 	Out.bPuttMade = Root->GetBoolField(TEXT("putt_made"));
+	Out.HoleAimBallIndex = 2147483647; // INT32_MAX: field absent → legacy crosshair on
+	if (Root->HasField(TEXT("hole_aim_ball_index")))
+	{
+		Out.HoleAimBallIndex = static_cast<int32>(Root->GetNumberField(TEXT("hole_aim_ball_index")));
+	}
 
 	auto ParseTracked = [](const TSharedPtr<FJsonObject>& Obj, FGolfTrackedObject& T)
 	{
@@ -446,6 +586,28 @@ bool AUDPGolfReceiver::ParsePayload(const FString& Json, FGolfUDPPayload& Out) c
 
 	ParseTracked(Root->GetObjectField(TEXT("ball")), Out.Ball);
 	ParseTracked(Root->GetObjectField(TEXT("putter")), Out.Putter);
+
+	Out.Putters.Reset();
+	static constexpr int32 kMaxPuttersUdp = 8;
+	const TArray<TSharedPtr<FJsonValue>>* PuttersArray = nullptr;
+	if (Root->TryGetArrayField(TEXT("putters"), PuttersArray) && PuttersArray)
+	{
+		for (const TSharedPtr<FJsonValue>& Elem : *PuttersArray)
+		{
+			const TSharedPtr<FJsonObject>* PO = nullptr;
+			if (Elem.IsValid() && Elem->TryGetObject(PO) && PO && (*PO).IsValid())
+			{
+				FGolfTrackedObject T;
+				ParseTracked(*PO, T);
+				Out.Putters.Add(T);
+				if (Out.Putters.Num() >= kMaxPuttersUdp) break;
+			}
+		}
+	}
+	if (Out.Putters.Num() == 0 && Out.Putter.bVisible)
+	{
+		Out.Putters.Add(Out.Putter);
+	}
 
 	Out.Holes.Reset();
 	const TArray<TSharedPtr<FJsonValue>>* HolesArray = nullptr;
@@ -684,6 +846,7 @@ void AUDPGolfReceiver::Tick(float DeltaTime)
 		LastUDPReceiveTime = FPlatformTime::Seconds();
 		BallData = Payload.Ball;
 		PutterData = Payload.Putter;
+		PuttersData = Payload.Putters;
 		HoleData = Payload.Hole;
 		HolesData = Payload.Holes;
 		BallsData = Payload.Balls;
@@ -691,6 +854,7 @@ void AUDPGolfReceiver::Tick(float DeltaTime)
 		TargetHoleIndex = FMath::Clamp(Payload.TargetHoleIndex, 0, FMath::Max(0, Payload.Holes.Num() - 1));
 		TargetHoleX = Payload.TargetHoleX;
 		TargetHoleY = Payload.TargetHoleY;
+		HoleAimBallIndex = Payload.HoleAimBallIndex;
 		PuttStats = Payload.Stats;
 		// Multi-ball: tracks are position-sorted; claimed stable_id may be Balls[1]+ while legacy used only [0].
 		PrimaryUsername = FString();
@@ -798,6 +962,7 @@ void AUDPGolfReceiver::Tick(float DeltaTime)
 		const FGolfBallPlacement& P = BallPlacementsData[i];
 		if (P.bWaitingPlacement && P.StableId >= 0)
 		{
+			EnsureUdpDrivenActorMovable(Marker);
 			const FVector TargetLoc = PixelToWorld(P.PixelX, P.PixelY);
 			if (bInterpolate)
 			{
@@ -818,6 +983,7 @@ void AUDPGolfReceiver::Tick(float DeltaTime)
 	auto MoveActor = [this, DeltaTime](AActor* Target, const FGolfTrackedObject& Data)
 	{
 		if (!Target || !Data.bVisible || !IsValidActorRef(Target) || Target->IsTemplate()) return;
+		EnsureUdpDrivenActorMovable(Target);
 
 		const FVector TargetLocation = PixelToWorld(Data.X, Data.Y);
 
@@ -836,47 +1002,149 @@ void AUDPGolfReceiver::Tick(float DeltaTime)
 	// Ball movement: use BallsData when available (multi-ball), else legacy BallData
 	if (BallsData.Num() > 0)
 	{
-		MoveActor(BallActor, BallsData[0].Tracked);
-		// Spawn additional ball actors when BallsData.Num() > 1
-		const int32 NeedBalls = BallsData.Num();
-		const int32 HaveBalls = (IsValidActorRef(BallActor) ? 1 : 0) + BallActors.Num();
-		if (IsValidActorRef(BallActor) && NeedBalls > 1)
+		// Spawn / trim extra ball actors (primary BallActor is always the first slot).
+		// During putts the tracker may keep extra balls[] rows (stale tracks) while only some are visible —
+		// sizing the pool by row count alone leaves ghost meshes. Prefer visible count when it is lower.
+		const int32 BallsDataNum = BallsData.Num();
+		int32 VisibleBalls = 0;
+		for (const FGolfBallInfo& Bi : BallsData)
+		{
+			if (Bi.Tracked.bVisible)
+			{
+				++VisibleBalls;
+			}
+		}
+		int32 NeedBalls = BallsDataNum;
+		if (VisibleBalls > 0 && VisibleBalls < BallsDataNum)
+		{
+			NeedBalls = VisibleBalls;
+		}
+		const int32 MaxExtraBallActors = FMath::Max(0, NeedBalls - 1);
+		int32 TrimmedBallActors = 0;
+		if (IsValidActorRef(BallActor))
 		{
 			UWorld* World = GetWorld();
 			if (World && !IsTemplate())
 			{
-				while (BallActors.Num() < NeedBalls - 1)
+				if (NeedBalls > 1)
 				{
-					const int32 BallIdx = BallActors.Num() + 1;
-					if (!BallsData.IsValidIndex(BallIdx)) break;
-					FActorSpawnParameters Params;
-					Params.Owner = this;
-					Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-					FVector SpawnLoc = PixelToWorld(BallsData[BallIdx].Tracked.X, BallsData[BallIdx].Tracked.Y);
-					SpawnLoc.Z = BallActor->GetActorLocation().Z;
-					AActor* Spawned = World->SpawnActor<AActor>(BallActor->GetClass(), SpawnLoc, FRotator::ZeroRotator, Params);
-					if (Spawned) BallActors.Add(Spawned);
-					else break;
+					while (BallActors.Num() < MaxExtraBallActors)
+					{
+						const int32 BallIdx = BallActors.Num() + 1;
+						if (!BallsData.IsValidIndex(BallIdx)) break;
+						FActorSpawnParameters Params;
+						Params.Owner = this;
+						Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+						FVector SpawnLoc = PixelToWorld(BallsData[BallIdx].Tracked.X, BallsData[BallIdx].Tracked.Y);
+						SpawnLoc.Z = BallActor->GetActorLocation().Z;
+						AActor* Spawned = World->SpawnActor<AActor>(BallActor->GetClass(), SpawnLoc, FRotator::ZeroRotator, Params);
+						if (Spawned) BallActors.Add(Spawned);
+						else break;
+					}
 				}
-				while (BallActors.Num() > FMath::Max(0, NeedBalls - 1))
+				// When NeedBalls is 1, MaxExtraBallActors is 0 — must still destroy spawns from prior multi-ball frames.
+				while (BallActors.Num() > MaxExtraBallActors)
 				{
 					AActor* ToDestroy = BallActors.Pop();
+					++TrimmedBallActors;
 					if (IsValid(ToDestroy)) ToDestroy->Destroy();
 				}
 			}
 		}
-		// Move additional ball actors
+		// #region agent log
+		AgentDebugBallPoolLog(NeedBalls, BallsDataNum, VisibleBalls, BallActors.Num(), MaxExtraBallActors, TrimmedBallActors);
+		// #endregion agent log
+
+		// Latch each visual slot to a tracker stable_id (balls[] are sorted by x,y; order swaps when balls cross).
+		const int32 ExpectedSlots = (IsValidActorRef(BallActor) ? 1 : 0) + BallActors.Num();
+		TArray<int32> SlotToBallsDataRow;
+		if (ExpectedSlots > 0)
+		{
+			const int32 OldNum = BallActorLatchedStableIds.Num();
+			if (OldNum != ExpectedSlots)
+			{
+				BallActorLatchedStableIds.SetNum(ExpectedSlots);
+				for (int32 j = OldNum; j < ExpectedSlots; ++j)
+				{
+					BallActorLatchedStableIds[j] = BallsData.IsValidIndex(j) ? BallsData[j].StableId : -1;
+				}
+			}
+		}
+
+		// Map slot -> BallsData row: prefer stable_id; never fall back to slot index (causes cross-swaps). Use nearest world match for the rest.
+		if (ExpectedSlots > 0 && IsValidActorRef(BallActor))
+		{
+			SlotToBallsDataRow.Init(INDEX_NONE, ExpectedSlots);
+			TSet<int32> ClaimedRows;
+			for (int32 Slot = 0; Slot < ExpectedSlots; ++Slot)
+			{
+				if (!BallActorLatchedStableIds.IsValidIndex(Slot)) continue;
+				const int32 Sid = BallActorLatchedStableIds[Slot];
+				if (Sid < 0) continue;
+				const int32 Di = FindRowByStableIdOnly(BallsData, Sid);
+				if (Di != INDEX_NONE && BallsData[Di].Tracked.bVisible && !ClaimedRows.Contains(Di))
+				{
+					SlotToBallsDataRow[Slot] = Di;
+					ClaimedRows.Add(Di);
+				}
+			}
+			for (int32 Slot = 0; Slot < ExpectedSlots; ++Slot)
+			{
+				if (SlotToBallsDataRow[Slot] != INDEX_NONE) continue;
+				AActor* Act = (Slot == 0) ? BallActor : BallActors[Slot - 1];
+				if (!IsValidActorRef(Act)) continue;
+				const FVector W = Act->GetActorLocation();
+				float BestD2 = 1.e20f;
+				int32 Best = INDEX_NONE;
+				for (int32 i = 0; i < BallsData.Num(); ++i)
+				{
+					if (ClaimedRows.Contains(i) || !BallsData[i].Tracked.bVisible) continue;
+					const FVector P = PixelToWorld(BallsData[i].Tracked.X, BallsData[i].Tracked.Y);
+					const float D2 = FVector::DistSquared(W, P);
+					if (D2 < BestD2)
+					{
+						BestD2 = D2;
+						Best = i;
+					}
+				}
+				if (Best != INDEX_NONE)
+				{
+					SlotToBallsDataRow[Slot] = Best;
+					ClaimedRows.Add(Best);
+					if (BallActorLatchedStableIds.IsValidIndex(Slot) && BallActorLatchedStableIds[Slot] < 0 && BallsData[Best].StableId >= 0)
+					{
+						BallActorLatchedStableIds[Slot] = BallsData[Best].StableId;
+					}
+				}
+			}
+		}
+
+		if (IsValidActorRef(BallActor) && SlotToBallsDataRow.IsValidIndex(0) && SlotToBallsDataRow[0] != INDEX_NONE)
+		{
+			const int32 Di = SlotToBallsDataRow[0];
+			if (BallsData[Di].Tracked.bVisible)
+			{
+				MoveActor(BallActor, BallsData[Di].Tracked);
+			}
+		}
 		for (int32 i = 0; i < BallActors.Num(); ++i)
 		{
-			const int32 DataIdx = i + 1;
-			if (!BallsData.IsValidIndex(DataIdx)) continue;
-			MoveActor(BallActors[i], BallsData[DataIdx].Tracked);
+			const int32 Slot = i + 1;
+			if (!SlotToBallsDataRow.IsValidIndex(Slot) || SlotToBallsDataRow[Slot] == INDEX_NONE) continue;
+			const int32 Di = SlotToBallsDataRow[Slot];
+			if (!BallsData[Di].Tracked.bVisible) continue;
+			MoveActor(BallActors[i], BallsData[Di].Tracked);
 		}
 		if (bAutoApplyBallLabelText)
 		{
-			auto ApplyBallLabel = [this](AActor* A, int32 SortedIdx)
+			auto ApplyBallLabel = [this, &SlotToBallsDataRow](AActor* A, int32 SlotIndex)
 			{
 				if (!IsValidActorRef(A) || A->IsTemplate()) return;
+				int32 SortedIdx = SlotIndex;
+				if (SlotToBallsDataRow.IsValidIndex(SlotIndex) && SlotToBallsDataRow[SlotIndex] != INDEX_NONE)
+				{
+					SortedIdx = SlotToBallsDataRow[SlotIndex];
+				}
 				const FText Label = GetBallLabelForSortedIndex(SortedIdx);
 				TArray<UTextRenderComponent*> Texts;
 				A->GetComponents<UTextRenderComponent>(Texts);
@@ -906,7 +1174,6 @@ void AUDPGolfReceiver::Tick(float DeltaTime)
 		else if (bAutoSpawnAimLines && IsValidActorRef(AimLineActor) && !AimLineActor->IsTemplate())
 		{
 			AimLineActor->GolfReceiver = this;
-			AimLineActor->AimLineBallSortedIndex = 0;
 			UWorld* WorldAim = GetWorld();
 			if (WorldAim && !IsTemplate())
 			{
@@ -948,6 +1215,27 @@ void AUDPGolfReceiver::Tick(float DeltaTime)
 					}
 				}
 			}
+			if (SlotToBallsDataRow.IsValidIndex(0) && SlotToBallsDataRow[0] != INDEX_NONE)
+			{
+				AimLineActor->AimLineBallSortedIndex = SlotToBallsDataRow[0];
+			}
+			else
+			{
+				AimLineActor->AimLineBallSortedIndex = 0;
+			}
+			for (int32 Li = 0; Li < AimLineActorsSpawned.Num(); ++Li)
+			{
+				if (!AimLineActorsSpawned[Li]) continue;
+				const int32 Slot = Li + 1;
+				if (SlotToBallsDataRow.IsValidIndex(Slot) && SlotToBallsDataRow[Slot] != INDEX_NONE)
+				{
+					AimLineActorsSpawned[Li]->AimLineBallSortedIndex = SlotToBallsDataRow[Slot];
+				}
+				else
+				{
+					AimLineActorsSpawned[Li]->AimLineBallSortedIndex = Slot;
+				}
+			}
 		}
 	}
 	else
@@ -976,9 +1264,115 @@ void AUDPGolfReceiver::Tick(float DeltaTime)
 	}
 	MoveActor(PutterActor, PutterData);
 
+	auto MoveCrosshair = [this, DeltaTime](AActor* Target, const FGolfTrackedObject& Data)
+	{
+		if (!Target || !IsValidActorRef(Target) || Target->IsTemplate()) return;
+		EnsureUdpDrivenActorMovable(Target);
+		if (!Data.bVisible)
+		{
+			Target->SetActorHiddenInGame(true);
+			return;
+		}
+		Target->SetActorHiddenInGame(false);
+		const FVector TargetLocation = PixelToWorld(Data.X, Data.Y);
+		if (bInterpolate)
+		{
+			const FVector Current = Target->GetActorLocation();
+			Target->SetActorLocation(
+				FMath::VInterpTo(Current, TargetLocation, DeltaTime, InterpolationSpeed));
+		}
+		else
+		{
+			Target->SetActorLocation(TargetLocation);
+		}
+	};
+
+	// Field omitted from JSON (Contour never connected): show crosshair. Explicit -1: hide.
+	const bool bHoleAimLegacy = (HoleAimBallIndex == 2147483647);
+	if (!bHoleAimLegacy && HoleAimBallIndex < 0)
+	{
+		for (AActor* C : PutterCrosshairActorsSpawned)
+		{
+			if (IsValid(C) && !C->IsTemplate())
+			{
+				C->Destroy();
+			}
+		}
+		PutterCrosshairActorsSpawned.Empty();
+		if (IsValidActorRef(PutterCrosshairTemplate) && !PutterCrosshairTemplate->IsTemplate())
+		{
+			PutterCrosshairTemplate->SetActorHiddenInGame(true);
+		}
+	}
+	else
+	{
+		// Multi-putter crosshairs (spawn from template; same pixel mapping as PutterActor)
+		if (!bAutoSpawnPutterCrosshairs || !IsValidActorRef(PutterCrosshairTemplate) || PutterCrosshairTemplate->IsTemplate())
+		{
+			for (AActor* C : PutterCrosshairActorsSpawned)
+			{
+				if (IsValid(C) && !C->IsTemplate())
+				{
+					C->Destroy();
+				}
+			}
+			PutterCrosshairActorsSpawned.Empty();
+			// Placed crosshair as template with auto-spawn off: drive the level instance (no duplicate spawns).
+			if (!bAutoSpawnPutterCrosshairs && IsValidActorRef(PutterCrosshairTemplate) && !PutterCrosshairTemplate->IsTemplate())
+			{
+				const FGolfTrackedObject& PcData = (PuttersData.Num() > 0) ? PuttersData[0] : PutterData;
+				MoveCrosshair(PutterCrosshairTemplate, PcData);
+			}
+		}
+		else
+		{
+			UWorld* WorldP = GetWorld();
+			const int32 NeedPutters = FMath::Clamp(PuttersData.Num(), 0, 8);
+			if (WorldP && !IsTemplate())
+			{
+				while (PutterCrosshairActorsSpawned.Num() < NeedPutters)
+				{
+					const int32 Idx = PutterCrosshairActorsSpawned.Num();
+					if (!PuttersData.IsValidIndex(Idx)) break;
+					FActorSpawnParameters PcParams;
+					PcParams.Owner = this;
+					PcParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+					FVector SpawnLoc = PixelToWorld(PuttersData[Idx].X, PuttersData[Idx].Y);
+					SpawnLoc.Z = PutterCrosshairTemplate->GetActorLocation().Z;
+					AActor* SpawnedP = WorldP->SpawnActor<AActor>(
+						PutterCrosshairTemplate->GetClass(), SpawnLoc, PutterCrosshairTemplate->GetActorRotation(), PcParams);
+					if (SpawnedP)
+					{
+						// SpawnActor uses the class CDO — match the placed template's scale (editor instance ≠ CDO).
+						SpawnedP->SetActorScale3D(PutterCrosshairTemplate->GetActorScale3D());
+						PutterCrosshairActorsSpawned.Add(SpawnedP);
+					}
+					else
+					{
+						break;
+					}
+				}
+				while (PutterCrosshairActorsSpawned.Num() > NeedPutters)
+				{
+					AActor* ToDestroy = PutterCrosshairActorsSpawned.Pop();
+					if (IsValid(ToDestroy) && !ToDestroy->IsTemplate())
+					{
+						ToDestroy->Destroy();
+					}
+				}
+			}
+			for (int32 i = 0; i < PutterCrosshairActorsSpawned.Num(); ++i)
+			{
+				if (!PuttersData.IsValidIndex(i)) continue;
+				MoveCrosshair(PutterCrosshairActorsSpawned[i], PuttersData[i]);
+			}
+		}
+	}
+
 	// Move single HoleActor (backward compat) from first hole
 	if (IsValidActorRef(HoleActor) && HolesData.Num() > 0 && HolesData[0].bVisible)
 	{
+		EnsureUdpDrivenActorMovable(HoleActor);
 		FVector TargetLocation = PixelToWorld(HolesData[0].X, HolesData[0].Y);
 		TargetLocation.Z = 0.f;
 		if (bInterpolate)
@@ -1002,6 +1396,7 @@ void AUDPGolfReceiver::Tick(float DeltaTime)
 		const FGolfHoleInfo& HoleInfo = HolesData[DataIdx];
 		if (!Target || !HoleInfo.bVisible || !IsValidActorRef(Target) || Target->IsTemplate()) continue;
 
+		EnsureUdpDrivenActorMovable(Target);
 		FVector TargetLocation = PixelToWorld(HoleInfo.X, HoleInfo.Y);
 		TargetLocation.Z = 0.f;
 		if (bInterpolate)

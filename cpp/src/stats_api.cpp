@@ -95,6 +95,9 @@ static std::string tracking_snapshot_json(const TrackingSnapshot& s) {
     oss << "],"
         << "\"frame_width\":" << s.frame_width << ","
         << "\"frame_height\":" << s.frame_height;
+    if (s.hole_aim_ball_index_set) {
+        oss << ",\"hole_aim_ball_index\":" << s.hole_aim_ball_index;
+    }
     // Users array for cross-device sync (username, ball_index, target_hole_index)
     oss << ",\"users\":[";
     for (size_t i = 0; i < s.users.size(); ++i) {
@@ -209,26 +212,62 @@ void StatsApi::run() {
             int idx = find_int("index");
             std::string session_id = find_str("session_id");
             std::string username = find_str("username");
-            int updated = 0;
-            if (session_id.empty()) {
+            int ball_index = find_int("ball_index");
+            if (ball_index >= 0) {
+                // Set target hole directly by ball stable index (works for any ball, claimed or not)
+                std::lock_guard<std::mutex> lock(users_mutex_);
+                bool found = false;
+                for (auto& u : users_) {
+                    if (u.ball_index == ball_index) {
+                        u.target_hole_index = idx;
+                        u.target_hole_anchor_valid = false;
+                        found = true;
+                    }
+                }
+                if (!found) {
+                    UserState nu;
+                    nu.session_id = session_id;
+                    nu.ball_index = ball_index;
+                    nu.target_hole_index = idx;
+                    nu.target_hole_anchor_valid = false;
+                    users_.push_back(std::move(nu));
+                }
+            } else if (session_id.empty()) {
                 target_hole_index_.store(idx);
             } else {
                 std::lock_guard<std::mutex> lock(users_mutex_);
                 if (!username.empty()) {
-                    // Cross-device: every row with this username gets the same target hole
                     for (auto& u : users_) {
                         if (u.username == username) {
                             u.target_hole_index = idx;
-                            ++updated;
+                            u.target_hole_anchor_valid = false;
                         }
                     }
                 } else {
                     for (auto& u : users_) {
-                        if (u.session_id == session_id) u.target_hole_index = idx;
+                        if (u.session_id == session_id) {
+                            u.target_hole_index = idx;
+                            u.target_hole_anchor_valid = false;
+                        }
                     }
                 }
             }
             res.set_content("{\"ok\":true,\"index\":" + std::to_string(idx) + "}", "application/json");
+        });
+
+        svr.Post("/api/hole-aim-selection", [this](const httplib::Request& req, httplib::Response& res) {
+            auto find_int = [&req](const char* key) {
+                std::string k(key);
+                size_t p = req.body.find("\"" + k + "\"");
+                if (p == std::string::npos) return -1;
+                p = req.body.find(':', p);
+                if (p == std::string::npos) return -1;
+                return static_cast<int>(std::strtol(req.body.c_str() + p + 1, nullptr, 10));
+            };
+            const int idx = find_int("hole_aim_ball_index");
+            hole_aim_ball_index_.store(idx);
+            hole_aim_ball_index_set_.store(true);
+            res.set_content("{\"ok\":true,\"hole_aim_ball_index\":" + std::to_string(idx) + "}", "application/json");
         });
 
         svr.Post("/api/claim-ball", [this](const httplib::Request& req, httplib::Response& res) {
@@ -265,14 +304,27 @@ void StatsApi::run() {
                 return;
             }
             std::lock_guard<std::mutex> lock(users_mutex_);
+            // Preserve target hole from any existing entry for this ball (anonymous or named)
+            int preserved_target_hole = -1;
+            for (const auto& u : users_) {
+                if (u.ball_index == ball_index && u.target_hole_index >= 0) {
+                    preserved_target_hole = u.target_hole_index;
+                    break;
+                }
+            }
+            // Clear ball_index from all entries
             for (auto& u : users_) {
                 if (u.ball_index == ball_index) u.ball_index = -1;
             }
-            int preserved_target_hole = -1;
+            // Remove anonymous zombies (no username, no ball)
+            users_.erase(std::remove_if(users_.begin(), users_.end(),
+                             [](const UserState& x) { return x.username.empty() && x.ball_index < 0; }),
+                         users_.end());
+            // Remove existing entry for this session+username (may override preserved target)
             users_.erase(std::remove_if(users_.begin(), users_.end(),
                              [&](const UserState& x) {
                                  if (x.session_id == session_id && x.username == username) {
-                                     preserved_target_hole = x.target_hole_index;
+                                     if (x.target_hole_index >= 0) preserved_target_hole = x.target_hole_index;
                                      return true;
                                  }
                                  return false;
@@ -283,6 +335,7 @@ void StatsApi::run() {
             nu.username = username;
             nu.ball_index = ball_index;
             nu.target_hole_index = preserved_target_hole;
+            nu.target_hole_anchor_valid = false;
             users_.push_back(std::move(nu));
             res.set_content("{\"ok\":true,\"ball_index\":" + std::to_string(ball_index) + ",\"username\":\"" + escape_json_str(username) + "\"}", "application/json");
         });
@@ -307,6 +360,47 @@ void StatsApi::run() {
     }
 }
 
+void StatsApi::refresh_target_hole_remap(const std::vector<HolePos>& holes) {
+    std::lock_guard<std::mutex> lock(users_mutex_);
+    constexpr float kMaxSnapPx = 200.f;
+    const float max_d2 = kMaxSnapPx * kMaxSnapPx;
+
+    for (auto& u : users_) {
+        if (u.target_hole_index < 0) {
+            u.target_hole_anchor_valid = false;
+            continue;
+        }
+        if (holes.empty()) continue;
+
+        if (!u.target_hole_anchor_valid) {
+            const size_t idx = static_cast<size_t>(u.target_hole_index);
+            if (idx < holes.size()) {
+                u.target_hole_anchor_x = holes[idx].x;
+                u.target_hole_anchor_y = holes[idx].y;
+                u.target_hole_anchor_valid = true;
+            }
+            continue;
+        }
+
+        int best_i = -1;
+        float best_d2 = 1e30f;
+        for (size_t i = 0; i < holes.size(); ++i) {
+            const HolePos& hp = holes[i];
+            if (!hp.valid) continue;
+            const float dx = hp.x - u.target_hole_anchor_x;
+            const float dy = hp.y - u.target_hole_anchor_y;
+            const float d2 = dx * dx + dy * dy;
+            if (d2 < best_d2) {
+                best_d2 = d2;
+                best_i = static_cast<int>(i);
+            }
+        }
+        if (best_i >= 0 && best_d2 <= max_d2) {
+            u.target_hole_index = best_i;
+        }
+    }
+}
+
 int StatsApi::get_target_hole_for_ball(int ball_index) const {
     std::lock_guard<std::mutex> lock(users_mutex_);
     for (const auto& u : users_) {
@@ -324,18 +418,9 @@ std::string StatsApi::get_username_for_ball(int ball_index) const {
 }
 
 std::string StatsApi::get_username_for_ball_or_fallback(int ball_index, size_t total_balls) const {
-    std::string u = get_username_for_ball(ball_index);
-    if (!u.empty()) return u;
-    if (total_balls != 1) return "";
-    std::lock_guard<std::mutex> lock(users_mutex_);
-    const UserState* single = nullptr;
-    for (const auto& st : users_) {
-        if (st.ball_index >= 0 && !st.username.empty()) {
-            if (single) return "";  // multiple claimed users
-            single = &st;
-        }
-    }
-    return single ? single->username : "";
+    (void)total_balls;
+    // Do not attribute a claimed username to a different stable_id (single-ball fallback was wrong with 2+ balls).
+    return get_username_for_ball(ball_index);
 }
 
 std::vector<UserState> StatsApi::get_user_states() const {
@@ -403,8 +488,11 @@ void StatsApi::try_reassign_placement_return_near_hint(const std::vector<Tracked
         if (u.username.empty()) continue;
         if (u.ball_track_visible) continue;
         if (!u.placement_hint_valid) continue;
-        // After-putt line hints and occlusion (last-known) hints: reclaimed ball often gets a new stable_id while
-        // the reserved ghost stays invalid — without snapping the claim, placement_waiting never clears.
+        // Only snap claim for made-putt return-line hints. Occlusion / pickup uses last-known pixels; the nearest
+        // *other* ball within range is often unrelated — reassigning there stole the username and cleared markers.
+        if (!u.placement_after_putt) continue;
+        // Made-putt line: reclaimed ball often gets a new stable_id while the reserved ghost stays invalid —
+        // snapping the claim clears placement_waiting when the real ball is seen again.
         wants.push_back({i, u.placement_pixel_x, u.placement_pixel_y});
     }
     if (wants.empty()) return;

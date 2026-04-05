@@ -217,6 +217,41 @@ export class TrackingService {
     return false;
   }
 
+  async selectTargetHoleForBall(holeIndex: number, ballIndex: number, username?: string): Promise<boolean> {
+    const sid = await this.ensureSession();
+    try {
+      const payload: Record<string, unknown> = { session_id: sid, index: holeIndex, ball_index: ballIndex };
+      if (username) payload['username'] = username;
+      const res = await fetch(`${this.apiBase}/api/target-hole`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        this.targetHoleIndex.set(holeIndex);
+        this.lastPostTime = Date.now();
+        return true;
+      }
+    } catch {
+      // ignore
+    }
+    return false;
+  }
+
+  /** Notify tracker/Unreal: which ball is selected for hole aiming (-1 = none). */
+  async setHoleAimBallIndex(ballIndex: number): Promise<void> {
+    const sid = await this.ensureSession();
+    try {
+      await fetch(`${this.apiBase}/api/hole-aim-selection`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sid, hole_aim_ball_index: ballIndex }),
+      });
+    } catch {
+      // ignore
+    }
+  }
+
   async claimBall(ballIndex: number, username: string): Promise<boolean> {
     const sid = await this.ensureSession();
     try {

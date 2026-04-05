@@ -228,7 +228,11 @@ void APuttMarkerActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 void APuttMarkerActor::HideAll()
 {
-	if (StatsWidget) StatsWidget->SetMarkerVisible(false);
+	if (StatsWidget)
+	{
+		StatsWidget->PuttTextandUser = FText::GetEmpty();
+		StatsWidget->SetMarkerVisible(false);
+	}
 	StoppedTimeSeconds = 0.f;
 	bIsFading = false;
 	bIsFadingIn = false;
@@ -243,9 +247,6 @@ void APuttMarkerActor::SetAllOpacity(float Opacity)
 
 void APuttMarkerActor::TakeFadeSnapshot(const FGolfPuttStats& Stats)
 {
-	SnapshotSpeedDisplay = Stats.LaunchSpeed * SpeedScale;
-	SnapshotPeakDisplay = Stats.PeakSpeed * SpeedScale;
-	SnapshotDistanceDisplay = Stats.TotalDistance * DistanceScale;
 	SnapshotLaunchWorld = GolfReceiver ? GolfReceiver->PixelToWorld(Stats.StartPos.X, Stats.StartPos.Y) : FVector::ZeroVector;
 }
 
@@ -454,10 +455,6 @@ void APuttMarkerActor::Tick(float DeltaTime)
 				TakeFadeSnapshot(Stats);
 				bIsFadingIn = false;
 				FadeElapsedSeconds = 0.f;
-				SnapshotSpeedDisplay = Stats.LaunchSpeed * SpeedScale;
-				SnapshotPeakDisplay = Stats.PeakSpeed * SpeedScale;
-				SnapshotDistanceDisplay = Stats.TotalDistance * DistanceScale;
-				SnapshotLaunchWorld = GolfReceiver->PixelToWorld(Stats.StartPos.X, Stats.StartPos.Y);
 			}
 			const float SafeFadeDur = FMath::Max(FadeDurationSeconds, 0.1f);  // Guard against 0 causing instant hide
 			const float Opacity = FMath::Max(0.f, 1.f - FadeElapsedSeconds / SafeFadeDur);
@@ -502,28 +499,24 @@ void APuttMarkerActor::Tick(float DeltaTime)
 		}
 	}
 
-	// Use snapshot during fade, else live Stats. Single marker at putt start with "L:launch P:peak D:distance".
+	// Launch marker mesh only (L/P/D shown on ball labels via AUDPGolfReceiver).
 	const bool bUseSnapshot = bIsFading;
-	const float SpeedDisplay   = bUseSnapshot ? SnapshotSpeedDisplay : (Stats.LaunchSpeed * SpeedScale);
-	const float PeakDisplay    = bUseSnapshot ? SnapshotPeakDisplay : (Stats.PeakSpeed * SpeedScale);
-	const float DistanceDisplay = bUseSnapshot ? SnapshotDistanceDisplay : (Stats.TotalDistance * DistanceScale);
 	const bool bHasLaunchPos = bUseSnapshot ? true : !Stats.StartPos.IsZero();
-	const bool bShowStats = !bFadeCompleted && (bStopped || (bInMotion && bHasLaunchPos) || bIsFading);
-
+	const bool bShowMarker = !bFadeCompleted && (bStopped || (bInMotion && bHasLaunchPos) || bIsFading);
 	const FVector LaunchWorld = bUseSnapshot ? SnapshotLaunchWorld : GolfReceiver->PixelToWorld(Stats.StartPos.X, Stats.StartPos.Y);
 
 	if (StatsWidget)
 	{
-		if (bShowStats)
+		if (bShowMarker)
 		{
 			StatsWidget->SetActorLocation(LaunchWorld);
-			StatsWidget->SetMarkerText(FText::FromString(FString::Printf(
-				TEXT("L:%.1f P:%.1f D:%.1f"),
-				SpeedDisplay, PeakDisplay, DistanceDisplay)));
+			StatsWidget->PuttTextandUser = FText::GetEmpty();
+			StatsWidget->SetMarkerText(FText::GetEmpty());
 			StatsWidget->SetMarkerVisible(true);
 		}
 		else
 		{
+			StatsWidget->PuttTextandUser = FText::GetEmpty();
 			StatsWidget->SetMarkerVisible(false);
 		}
 	}

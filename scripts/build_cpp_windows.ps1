@@ -9,9 +9,8 @@
 #   CUDAToolkit_ROOT - CUDA toolkit (default: C:\Program Files\...\CUDA\v13.1)
 #   OPENCV_DIR       - OpenCV build dir containing OpenCVConfig.cmake
 #
-# (Cache is always cleared so the x64 toolchain is detected correctly.)
-
-param([switch]$Clean) # ignored; cache is always cleared
+# The cpp\build directory is removed and recreated each run so CMake starts fresh
+# (avoids stale cache and ensures the x64 toolchain is detected correctly).
 
 $ErrorActionPreference = "Stop"
 $repoRoot = (Get-Item $PSScriptRoot).Parent.FullName
@@ -53,8 +52,12 @@ if (-not (Test-Path $vcvars64)) {
     Write-Error "vcvars64.bat not found. Install Visual Studio 2022 (or Build Tools) with 'Desktop development with C++'."
 }
 
-# Ensure build dir exists
-if (-not (Test-Path $buildDir)) { New-Item -ItemType Directory -Path $buildDir -Force | Out-Null }
+# Fresh build: remove entire build tree (including old artifacts), then recreate empty dir.
+if (Test-Path $buildDir) {
+    Write-Host "Removing $buildDir" -ForegroundColor DarkGray
+    Remove-Item -Path $buildDir -Recurse -Force
+}
+New-Item -ItemType Directory -Path $buildDir -Force | Out-Null
 
 $cudaRootSlash = $cudaRoot -replace '\\','/'
 $opencvSlash = $opencvDir -replace '\\','/'
@@ -69,10 +72,6 @@ $cmakeArgs += " -DCUDAToolkit_ROOT=`"$cudaRootSlash`""
 $cmakeArgs += " -DCUDA_TOOLKIT_ROOT_DIR=`"$cudaRootSlash`""
 $cmakeArgs += " -DOpenCV_DIR=`"$opencvSlash`""
 $cmakeArgs += " -DTENSORRT_DIR=`"$tensorRtSlash`""
-
-# Always clear CMake cache so the compiler/linker are detected from the current x64 env (avoids reusing an x86 cache).
-Remove-Item -Path (Join-Path $buildDir "CMakeCache.txt") -ErrorAction SilentlyContinue
-Remove-Item -Path (Join-Path $buildDir "CMakeFiles") -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host "================================================================" -ForegroundColor Cyan
 Write-Host " Building golf_sim (C++ inference)" -ForegroundColor Cyan

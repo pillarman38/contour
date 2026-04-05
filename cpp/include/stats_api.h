@@ -11,6 +11,7 @@
 //   GET /api/stats/session   – session summary (averages)
 //   GET /api/tracking       – ball, holes, frame dimensions (for top-down view)
 //   POST /api/target-hole   – set target hole index { "index": 0 }
+//   POST /api/hole-aim-selection – { "hole_aim_ball_index": <stable_id or -1> } (Contour hole-aim mode)
 // ─────────────────────────────────────────────────────────────────────────────
 
 #include "putt_stats.h"
@@ -31,6 +32,10 @@ struct UserState {
     std::string username;
     int ball_index = -1;      // -1 = not claimed (stable_id from tracker)
     int target_hole_index = -1;
+    /** Pixel anchor for the chosen cup; \ref refresh_target_hole_remap keeps index stable when holes reorder. */
+    float target_hole_anchor_x = 0.f;
+    float target_hole_anchor_y = 0.f;
+    bool target_hole_anchor_valid = false;
     /** Last known ball centre while track had a live detection (for occlusion / non-made putt). */
     float last_known_pixel_x = 0.f;
     float last_known_pixel_y = 0.f;
@@ -76,6 +81,11 @@ struct TrackingSnapshot {
     PutterInfo putter;                  // best-confidence single putter (legacy/UE)
     std::vector<PutterInfo> putters;    // all detected putters this frame
 
+    /** Contour: stable ball index while user is selecting a hole (-1 = not aiming). */
+    int hole_aim_ball_index = -1;
+    /** False until POST /api/hole-aim-selection; when false, UDP may omit hole_aim (Unreal shows crosshair). */
+    bool hole_aim_ball_index_set = false;
+
     std::vector<UserState> users;
 };
 
@@ -100,6 +110,12 @@ public:
     /// Target hole index set by POST /api/target-hole (-1 = use auto-selection). Legacy single-user.
     int get_target_hole_index() const { return target_hole_index_.load(); }
 
+    /// Ball stable_id index for hole-aim UI in Contour (-1 = hide putter crosshair in UE).
+    int get_hole_aim_ball_index() const { return hole_aim_ball_index_.load(); }
+
+    /// True after any POST /api/hole-aim-selection (so UDP can include the field).
+    bool get_hole_aim_ball_index_set() const { return hole_aim_ball_index_set_.load(); }
+
     /// Target hole index for a specific ball (from user who claimed it). -1 if none.
     int get_target_hole_for_ball(int ball_index) const;
 
@@ -111,6 +127,10 @@ public:
 
     /// All user states (for main loop to build per-ball stats).
     std::vector<UserState> get_user_states() const;
+
+    /// Call each frame after \ref Tracker::update so aim targets follow the same physical hole when
+    /// \c holes[] is re-sorted or a new hole appears (index is not stable across frames).
+    void refresh_target_hole_remap(const std::vector<HolePos>& holes);
 
     /// Call each frame after \ref Tracker::update to refresh last-known / visibility for claims.
     void sync_ball_placements_from_tracker(const std::vector<TrackedObject>& balls);
@@ -132,6 +152,8 @@ private:
     std::thread thread_;
     std::atomic<bool> running_{false};
     std::atomic<int> target_hole_index_{-1};
+    std::atomic<int> hole_aim_ball_index_{-1};
+    std::atomic<bool> hole_aim_ball_index_set_{false};
 
     mutable std::mutex users_mutex_;
     /** Multiple rows per session_id allowed (one per claimed username on this browser). */

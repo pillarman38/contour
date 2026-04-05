@@ -20,7 +20,9 @@ over UDP and drives actors in the Unreal scene.
   | **Interpolate**            | `true`                    | Smooth movement via `VInterpTo`    |
   | **Interpolation Speed**    | `15`                      | Higher = snappier tracking         |
 
-4. **Run the tracker**, then press **Play** in UE:
+4. **Multi-putter crosshairs (optional)** — place **one** instance of your crosshair Blueprint in the level (e.g. `crosshair_Blueprint`) and assign it to **Putter Crosshair Template** on the receiver. Enable **Auto Spawn Putter Crosshairs**. The tracker sends a `putters` array; the receiver spawns one crosshair actor per entry (up to 8), using the same pixel→world mapping as **Putter Actor**. Hide the template instance in-game if you only want the spawned copies visible.
+
+5. **Run the tracker**, then press **Play** in UE:
   ```
    golf_sim.exe --engine model.engine --port 7001
   ```

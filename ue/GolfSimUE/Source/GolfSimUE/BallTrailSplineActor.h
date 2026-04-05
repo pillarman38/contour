@@ -27,6 +27,7 @@ public:
 	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "BallTrail|Actors", meta = (AllowAbstract = "false"))
 	AUDPGolfReceiver* GolfReceiver = nullptr;
 
+	/** Ball this trail follows (required for correct multi-ball trails; legacy "ball" / BallData is tracker balls[0] only). */
 	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "BallTrail|Actors", meta = (AllowAbstract = "false"))
 	AActor* BallActor = nullptr;
 
@@ -48,6 +49,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "BallTrail|Behaviour", meta = (ClampMin = "0.1", Tooltip = "Min distance (Unreal units) between trail samples."))
 	float SampleDistanceThreshold = 2.f;
 
+	/** If the ball jumps farther than this between samples (e.g. tracker slot reassignment when a new ball appears), clear the trail so we do not draw a long connector. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "BallTrail|Behaviour", meta = (ClampMin = "10.0"))
+	float TeleportClearThreshold = 120.f;
+
 	virtual void Tick(float DeltaTime) override;
 
 protected:
@@ -60,6 +65,8 @@ protected:
 	TArray<FVector> TrailPoints;
 	float StoppedElapsedSeconds = 0.f;
 	int32 LastPuttNumber = -1;
+	/** Last BallsData.Num() from receiver; used to clear trail when balls are added/removed. */
+	int32 LastBallsDataCount = -1;
 	bool bWasInMotion = false;
 	bool bIsFadingOut = false;
 	float FadeOutElapsedSeconds = 0.f;

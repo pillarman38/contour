@@ -162,11 +162,13 @@ int main(int argc, char** argv) {
         {
             std::unordered_set<int> reserved_stable;
             for (const auto& u : api.get_user_states()) {
-                if (!u.username.empty() && u.ball_index >= 0) reserved_stable.insert(u.ball_index);
+                if (u.ball_index >= 0 && (!u.username.empty() || u.target_hole_index >= 0))
+                    reserved_stable.insert(u.ball_index);
             }
             tracker.set_reserved_stable_ids(std::move(reserved_stable));
         }
         tracker.update(detections, dt);
+        api.refresh_target_hole_remap(tracker.holes());
 
         if (ball_was_visible && !tracker.ball_visible()) {
             putt_stats.on_ball_lost();  // Ball lost before slowing down: transition to STOPPED so UE can fade
@@ -284,6 +286,8 @@ int main(int argc, char** argv) {
                 hi.visible = h.valid;
                 tracking_state.snapshot.holes.push_back(hi);
             }
+            tracking_state.snapshot.hole_aim_ball_index_set = api.get_hole_aim_ball_index_set();
+            tracking_state.snapshot.hole_aim_ball_index = api.get_hole_aim_ball_index();
         }
 
         std::vector<golf::UnrealSender::BallPayload> ball_payloads;
@@ -308,17 +312,18 @@ int main(int argc, char** argv) {
             thx = hp.x;
             thy = hp.y;
         }
+        // Match Contour ballsWithTarget / HTTP API: no aim target until the user picks a hole
+        // (get_target_hole_for_ball < 0). Do not substitute tracker.primary_hole_index — that made
+        // Unreal draw lines while Contour showed none (thi -1 in /api/tracking).
         auto fill_ball_aim = [&](golf::UnrealSender::BallPayload& bp, const golf::TrackedObject& ball_obj) {
-            int tib = api.get_target_hole_for_ball(ball_obj.stable_id);
-            if (tib < 0) tib = tracker.primary_hole_index();
+            const int tib = api.get_target_hole_for_ball(ball_obj.stable_id);
             bp.target_hole_index = tib;
             if (tib >= 0 && static_cast<size_t>(tib) < holes_vec.size()) {
                 bp.target_hole_x = holes_vec[static_cast<size_t>(tib)].x;
                 bp.target_hole_y = holes_vec[static_cast<size_t>(tib)].y;
             } else {
-                const auto& hp = tracker.hole_pos();
-                bp.target_hole_x = hp.x;
-                bp.target_hole_y = hp.y;
+                bp.target_hole_x = 0.f;
+                bp.target_hole_y = 0.f;
             }
         };
 
@@ -337,8 +342,10 @@ int main(int argc, char** argv) {
                 golf::UnrealSender::BallPayload bp;
                 bp.ball = &balls_vec[i];
                 bp.username = api.get_username_for_ball_or_fallback(balls_vec[i].stable_id, balls_vec.size());
-                bp.stats = (i == 0) ? stats_to_send : golf::PuttData{};
-                bp.is_putt_made = (i == 0) ? send_putt_made : false;
+                // Same session putt stats on every ball (tracker sort order is not "active putter").
+                // Only sending stats on index 0 left other balls with idle stats → no L/P/D on Unreal labels.
+                bp.stats = stats_to_send;
+                bp.is_putt_made = send_putt_made;
                 fill_ball_aim(bp, balls_vec[i]);
                 ball_payloads.push_back(bp);
             }
@@ -349,7 +356,8 @@ int main(int argc, char** argv) {
             placement_hints.push_back({u.username, u.ball_index, u.placement_pixel_x, u.placement_pixel_y,
                                      u.placement_waiting, u.placement_after_putt});
         }
-        sender.send(ball_payloads, tracker.putter(), tracker.holes(), ti, thx, thy, placement_hints);
+        sender.send(ball_payloads, tracker.putter(), tracker.putters(), tracker.holes(), ti, thx, thy,
+                    placement_hints, api.get_hole_aim_ball_index_set(), api.get_hole_aim_ball_index());
 
         // Visualise
         if (cfg.show_gui) {

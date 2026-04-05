@@ -31,6 +31,10 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Marker")
 	UStaticMeshComponent* MarkerMesh = nullptr;
 
+	/** Reserved for Blueprint; launch stats are shown on ball labels (AUDPGolfReceiver), not here. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Marker")
+	FText PuttTextandUser;
+
 	/** Updates any Text Render component on this actor (Blueprint-added or inherited). */
 	UFUNCTION(BlueprintCallable, Category = "Marker")
 	void SetMarkerText(const FText& Text);
@@ -68,8 +72,7 @@ protected:
 // APuttMarkerActor — Spawns a single stats marker at the putt start.
 //
 // Assign a Blueprint subclass of APuttMarkerWidget to MarkerClass.
-// Displays "L:launch P:peak D:distance" at the putt start. Positioning/layout
-// can be customized in Unreal via the MarkerClass Blueprint.
+// Spawns a visual marker at putt start (mesh only); numeric stats appear on ball username labels.
 // ─────────────────────────────────────────────────────────────────────────────
 UCLASS(Blueprintable, meta = (DisplayName = "Putt Marker Actor"))
 class GOLFSIMUE_API APuttMarkerActor : public AActor
@@ -120,14 +123,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "PuttMarkers|Behaviour", meta = (ClampMin = "0.5", ClampMax = "5.0"))
 	float InMotionDebounceSeconds = 2.f;
 
-	/** Scale factor for speed display (in/s). Use if C++ calibration yields wrong values (e.g. 0.01 if values are 100x too large). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "PuttMarkers|Display", meta = (ClampMin = "0.001"))
-	float SpeedScale = 1.f;
-
-	/** Scale factor for distance display (inches). Same usage as SpeedScale. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "PuttMarkers|Display", meta = (ClampMin = "0.001"))
-	float DistanceScale = 1.f;
-
 	virtual void Tick(float DeltaTime) override;
 
 protected:
@@ -169,9 +164,6 @@ private:
 
 	/** Snapshot when fade started; used so fade isn't interrupted by new UDP data. */
 	FVector SnapshotLaunchWorld = FVector::ZeroVector;
-	float SnapshotSpeedDisplay = 0.f;
-	float SnapshotPeakDisplay = 0.f;
-	float SnapshotDistanceDisplay = 0.f;
 
 	APuttMarkerWidget* SpawnWidget(FName Label);
 	void HideAll();

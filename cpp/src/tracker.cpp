@@ -17,7 +17,10 @@ static constexpr float kHoleMatchDistPx = 80.f;   // detection within this dist 
 static constexpr float kBallMatchDistPx = 60.f;    // base match radius (px) for stationary / slow ball
 static constexpr float kBallMatchSpeedScale = 6.f;   // extra radius += speed_px_per_s * dt * this (fast putts)
 static constexpr float kBallMatchMaxPx = 450.f;    // cap so distant false detections do not steal tracks
+static constexpr float kPutterOcclusionDistPx = 150.f; // putter-to-ball distance that counts as occlusion
 static constexpr int kHoleMaxLostFrames = 150;     // keep hole this long when not seen
+static constexpr float kHoleConfirmSeconds = 5.f;  // new detection must be seen this long before it becomes a hole
+static constexpr int kPendingHoleMaxLostFrames = 5; // consecutive unmatched frames before dropping a pending hole
 
 Tracker::Tracker(float alpha, int max_lost)
     : alpha_(alpha), max_lost_(max_lost) {
@@ -53,14 +56,18 @@ void Tracker::update(const std::vector<Detection>& detections, double dt) {
     if (ball_dets.size() > kMaxBalls) ball_dets.resize(kMaxBalls);
 
     bool ball_was_valid = ball().valid;  // primary ball before update
-    // Persist holes when they disappear: match detections to existing holes by position.
-    // Only remove a hole when it has been gone for kHoleMaxLostFrames.
+    // Confirmed holes: match detections by position. New detections go to pending_holes_; they only enter holes_
+    // after kHoleConfirmSeconds of continuous visibility. If a pending track is lost for more than
+    // kPendingHoleMaxLostFrames before confirmation, it is discarded.
     std::sort(hole_dets.begin(), hole_dets.end(),
               [](const Detection* a, const Detection* b) { return a->confidence > b->confidence; });
     if (hole_dets.size() > kMaxHoles) hole_dets.resize(kMaxHoles);
 
     std::vector<bool> hole_matched(holes_.size(), false);
-    for (const Detection* d : hole_dets) {
+    std::vector<bool> det_used(hole_dets.size(), false);
+
+    for (size_t di = 0; di < hole_dets.size(); ++di) {
+        const Detection* d = hole_dets[di];
         float dx = d->cx();
         float dy = d->cy();
         float radius = (d->width() + d->height()) / 4.0f;
@@ -71,28 +78,95 @@ void Tracker::update(const std::vector<Detection>& detections, double dt) {
             float hx = holes_[i].x - dx;
             float hy = holes_[i].y - dy;
             float d2 = hx * hx + hy * hy;
-            if (d2 < best_d2) { best_d2 = d2; best_idx = static_cast<int>(i); }
+            if (d2 < best_d2) {
+                best_d2 = d2;
+                best_idx = static_cast<int>(i);
+            }
         }
         if (best_idx >= 0) {
-            HolePos& h = holes_[best_idx];
-            hole_matched[best_idx] = true;
+            HolePos& h = holes_[static_cast<size_t>(best_idx)];
+            hole_matched[static_cast<size_t>(best_idx)] = true;
+            det_used[di] = true;
             h.x = alpha_ * dx + (1.f - alpha_) * h.x;
             h.y = alpha_ * dy + (1.f - alpha_) * h.y;
             h.radius = radius;
             h.valid = true;
             h.frames_since_seen = 0;
-        } else {
-            HolePos h;
-            h.class_id = kHoleClassId;
-            h.x = dx;
-            h.y = dy;
-            h.radius = radius;
-            h.valid = true;
-            h.frames_since_seen = 0;
-            holes_.push_back(h);
-            hole_matched.push_back(true);
         }
     }
+
+    for (PendingHole& ph : pending_holes_) {
+        ph.seen_this_frame = false;
+    }
+
+    const float dt_f = static_cast<float>(dt);
+
+    for (size_t di = 0; di < hole_dets.size(); ++di) {
+        if (det_used[di]) continue;
+        const Detection* d = hole_dets[di];
+        float dx = d->cx();
+        float dy = d->cy();
+        float radius = (d->width() + d->height()) / 4.0f;
+        float best_d2 = kHoleMatchDistPx * kHoleMatchDistPx;
+        int best_pi = -1;
+        for (size_t i = 0; i < pending_holes_.size(); ++i) {
+            if (pending_holes_[i].seen_this_frame) continue;
+            float hx = pending_holes_[i].x - dx;
+            float hy = pending_holes_[i].y - dy;
+            float d2 = hx * hx + hy * hy;
+            if (d2 < best_d2) {
+                best_d2 = d2;
+                best_pi = static_cast<int>(i);
+            }
+        }
+        if (best_pi >= 0) {
+            PendingHole& ph = pending_holes_[static_cast<size_t>(best_pi)];
+            ph.seen_this_frame = true;
+            ph.x = alpha_ * dx + (1.f - alpha_) * ph.x;
+            ph.y = alpha_ * dy + (1.f - alpha_) * ph.y;
+            ph.radius = radius;
+            ph.seconds_visible += dt_f;
+            ph.frames_lost_streak = 0;
+        } else if (pending_holes_.size() < kMaxHoles) {
+            PendingHole ph;
+            ph.x = dx;
+            ph.y = dy;
+            ph.radius = radius;
+            ph.seconds_visible = dt_f;
+            ph.frames_lost_streak = 0;
+            ph.seen_this_frame = true;
+            pending_holes_.push_back(ph);
+        }
+    }
+
+    for (size_t i = 0; i < pending_holes_.size();) {
+        if (!pending_holes_[i].seen_this_frame) {
+            pending_holes_[i].frames_lost_streak++;
+            if (pending_holes_[i].frames_lost_streak > kPendingHoleMaxLostFrames) {
+                pending_holes_.erase(pending_holes_.begin() + static_cast<std::ptrdiff_t>(i));
+                continue;
+            }
+        }
+        ++i;
+    }
+
+    for (int pi = static_cast<int>(pending_holes_.size()) - 1; pi >= 0; --pi) {
+        const size_t psi = static_cast<size_t>(pi);
+        PendingHole& ph = pending_holes_[psi];
+        if (ph.seconds_visible < kHoleConfirmSeconds) continue;
+        if (!ph.seen_this_frame) continue;
+        HolePos h;
+        h.class_id = kHoleClassId;
+        h.x = ph.x;
+        h.y = ph.y;
+        h.radius = ph.radius;
+        h.valid = true;
+        h.frames_since_seen = 0;
+        holes_.push_back(h);
+        hole_matched.push_back(true);
+        pending_holes_.erase(pending_holes_.begin() + static_cast<std::ptrdiff_t>(pi));
+    }
+
     for (size_t i = 0; i < holes_.size(); ++i) {
         if (!hole_matched[i]) {
             holes_[i].frames_since_seen++;
@@ -115,7 +189,6 @@ void Tracker::update(const std::vector<Detection>& detections, double dt) {
     // Multi-ball: match by position; widen search radius when the ball is moving fast so putts
     // do not drop the track (new stable_id => username / aim line lost in the app).
     std::vector<bool> ball_matched(balls_.size(), false);
-    const float dt_f = static_cast<float>(dt);
     for (const Detection* d : ball_dets) {
         float dx = d->cx();
         float dy = d->cy();
@@ -161,13 +234,13 @@ void Tracker::update(const std::vector<Detection>& detections, double dt) {
     for (size_t i = 0; i < balls_.size(); ++i) {
         if (!ball_matched[i]) {
             // Putter occlusion: if a putter is near this ball's last position, keep it
-            // valid (the putter head is hiding the ball from the camera, not a real loss).
+            // valid (the putter head / hand is hiding the ball from the camera).
             if (balls_[i].valid) {
                 bool putter_occluding = false;
                 for (const Detection* pd : putter_dets) {
                     float px = pd->cx() - balls_[i].x;
                     float py = pd->cy() - balls_[i].y;
-                    if (px * px + py * py < kBallMatchDistPx * kBallMatchDistPx) {
+                    if (px * px + py * py < kPutterOcclusionDistPx * kPutterOcclusionDistPx) {
                         putter_occluding = true;
                         break;
                     }

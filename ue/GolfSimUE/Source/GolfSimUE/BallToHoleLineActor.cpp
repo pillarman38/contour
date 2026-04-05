@@ -5,7 +5,6 @@
 #include "Components/TextRenderComponent.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialInstanceDynamic.h"
-#include "HAL/PlatformTime.h"
 #include "Serialization/Archive.h"
 #include "UObject/ObjectSaveContext.h"
 #include "UObject/UnrealType.h"
@@ -173,19 +172,41 @@ void ABallToHoleLineActor::Tick(float DeltaTime)
 		if (ValidReceiver->BallsData.IsValidIndex(AimLineBallSortedIndex))
 		{
 			const FGolfBallInfo& Bi = ValidReceiver->BallsData[AimLineBallSortedIndex];
-			if (Bi.Username.IsEmpty())
-			{
-				SetLineVisibility(false);
-				return;
-			}
-			bPerBallAim = (Bi.TargetHoleX != 0.f || Bi.TargetHoleY != 0.f)
-				|| (Bi.TargetHoleIndex >= 0 && ValidReceiver->HolesData.IsValidIndex(Bi.TargetHoleIndex));
+			// Contour green-view: aim only when visible && 0 <= target_hole_index < holes.length (not pixel-only).
+			bPerBallAim = (Bi.TargetHoleIndex >= 0 && ValidReceiver->HolesData.IsValidIndex(Bi.TargetHoleIndex));
 			if (!bPerBallAim)
 			{
 				SetLineVisibility(false);
 				return;
 			}
 			bHasValidHole = true;
+			// Match Contour ballsWithTarget: hide aim when this ball is off-screen (invisible) even if target is set.
+			if (!Bi.Tracked.bVisible)
+			{
+				SetLineVisibility(false);
+				bHasLastBallLocation = false;
+				BothLostElapsedSeconds = 0.f;
+				UpdateLine();
+				return;
+			}
+		}
+		else if (ValidReceiver->BallsData.Num() > 0 && !ValidReceiver->BallsData.IsValidIndex(AimLineBallSortedIndex))
+		{
+			// Multi-ball payload does not include this aim line index — hide (e.g. extra spawned line actor).
+			SetLineVisibility(false);
+			bHasLastBallLocation = false;
+			BothLostElapsedSeconds = 0.f;
+			UpdateLine();
+			return;
+		}
+		else if (ValidReceiver->BallsData.Num() == 0 && !ValidReceiver->BallData.bVisible)
+		{
+			// Legacy single-ball: match Contour ballsWithTarget — no line until the tracker reports a visible ball.
+			SetLineVisibility(false);
+			bHasLastBallLocation = false;
+			BothLostElapsedSeconds = 0.f;
+			UpdateLine();
+			return;
 		}
 	}
 
@@ -354,13 +375,7 @@ void ABallToHoleLineActor::UpdateLine()
 		if (Bi.Tracked.bVisible)
 		{
 			PerBallBallLoc = ValidReceiver->PixelToWorld(Bi.Tracked.X, Bi.Tracked.Y);
-			if (Bi.TargetHoleX != 0.f || Bi.TargetHoleY != 0.f)
-			{
-				HoleLoc = ValidReceiver->PixelToWorld(Bi.TargetHoleX, Bi.TargetHoleY);
-				bHasHoleLoc = true;
-				bUsePerBallAim = true;
-			}
-			else if (Bi.TargetHoleIndex >= 0 && ValidReceiver->HolesData.IsValidIndex(Bi.TargetHoleIndex))
+			if (Bi.TargetHoleIndex >= 0 && ValidReceiver->HolesData.IsValidIndex(Bi.TargetHoleIndex))
 			{
 				const FGolfHoleInfo& H = ValidReceiver->HolesData[Bi.TargetHoleIndex];
 				HoleLoc = ValidReceiver->PixelToWorld(H.X, H.Y);
@@ -368,6 +383,28 @@ void ABallToHoleLineActor::UpdateLine()
 				bUsePerBallAim = true;
 			}
 		}
+		// Contour parity: do not fall back to primary BallActor when this sorted ball is invisible.
+		if (!Bi.Tracked.bVisible)
+		{
+			SplineComponent->ClearSplinePoints();
+			if (LineMeshComponent) { LineMeshComponent->SetVisibility(false, true); }
+			if (DistanceTextComponent) { DistanceTextComponent->SetVisibility(false); }
+			return;
+		}
+	}
+	else if (ValidReceiver && ValidReceiver->BallsData.Num() > 0 && !ValidReceiver->BallsData.IsValidIndex(AimLineBallSortedIndex))
+	{
+		SplineComponent->ClearSplinePoints();
+		if (LineMeshComponent) { LineMeshComponent->SetVisibility(false, true); }
+		if (DistanceTextComponent) { DistanceTextComponent->SetVisibility(false); }
+		return;
+	}
+	else if (ValidReceiver && ValidReceiver->BallsData.Num() == 0 && !ValidReceiver->BallData.bVisible)
+	{
+		SplineComponent->ClearSplinePoints();
+		if (LineMeshComponent) { LineMeshComponent->SetVisibility(false, true); }
+		if (DistanceTextComponent) { DistanceTextComponent->SetVisibility(false); }
+		return;
 	}
 
 	if (!bUsePerBallAim)
