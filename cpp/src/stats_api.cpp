@@ -6,9 +6,11 @@
 #include "httplib.h"
 
 #include <algorithm>
+#include <cmath>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <random>
 #include <sstream>
@@ -449,27 +451,89 @@ void StatsApi::sync_ball_placements_from_tracker(const std::vector<TrackedObject
             u.last_known_pixel_x = tr->x;
             u.last_known_pixel_y = tr->y;
             u.last_known_valid = true;
-            u.placement_return_after_putt = false;
             u.ball_track_visible = true;
+            // After a make, the ball is often visible in the cup — do not clear "return to start" until the ball
+            // is seen again near the putt start; otherwise last_known becomes the cup and the marker jumps to the hole.
+            if (u.placement_return_after_putt && u.placement_putt_start_valid) {
+                const float dx = tr->x - u.placement_putt_start_x;
+                const float dy = tr->y - u.placement_putt_start_y;
+                const float d2 = dx * dx + dy * dy;
+                // Slightly larger than reclaim snap radius so the same ball can clear "return" after a valid snap.
+                constexpr float kReturnNearStartPx = 130.f;
+                if (d2 <= kReturnNearStartPx * kReturnNearStartPx) {
+                    u.placement_return_after_putt = false;
+                    u.placement_putt_start_valid = false;
+                }
+            } else {
+                u.placement_return_after_putt = false;
+                u.placement_putt_start_valid = false;
+            }
         }
     }
 }
 
-void StatsApi::notify_putt_made_for_stable_id(int stable_id) {
+void StatsApi::notify_putt_made_for_stable_id(int stable_id, float start_x, float start_y) {
     if (stable_id < 0) return;
     std::lock_guard<std::mutex> lock(users_mutex_);
     for (auto& u : users_) {
         if (u.ball_index == stable_id && !u.username.empty()) {
             u.placement_return_after_putt = true;
+            u.placement_putt_start_x = start_x;
+            u.placement_putt_start_y = start_y;
+            u.placement_putt_start_valid = true;
+            // #region agent log (debug a3d342)
+            {
+                const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                std::ofstream dbg("../../debug-a3d342.log", std::ios::app);
+                if (dbg.is_open()) {
+                    dbg << "{\"sessionId\":\"a3d342\",\"hypothesisId\":\"H_PLACE\",\"location\":\"StatsApi::notify_putt_made\",\"message\":\"putt_start_captured\",\"data\":{\"stable_id\":" << stable_id << ",\"start_x\":" << start_x << ",\"start_y\":" << start_y << "},\"timestamp\":" << ms << "}\n";
+                }
+            }
+            // #endregion agent log (debug a3d342)
             return;
         }
     }
+    // #region agent log (debug a3d342)
+    {
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        std::ofstream dbg("../../debug-a3d342.log", std::ios::app);
+        if (dbg.is_open()) {
+            dbg << "{\"sessionId\":\"a3d342\",\"hypothesisId\":\"H_NOTIFY_MISS\",\"location\":\"StatsApi::notify_putt_made\",\"message\":\"no_user_for_stable_id\",\"data\":{\"stable_id\":" << stable_id << "},\"timestamp\":" << ms << "}\n";
+        }
+    }
+    // #endregion agent log (debug a3d342)
 }
 
 void StatsApi::try_reassign_placement_return_near_hint(const std::vector<TrackedObject>& balls,
                                                        float max_dist_px) {
     std::lock_guard<std::mutex> lock(users_mutex_);
     const float max_d2 = max_dist_px * max_dist_px;
+    const float min_gap = kPlacementReclaimUnambiguousGapPx;
+
+    // If more than one ball track is visible, the nearest ball to the return hint is often *not* the returning
+    // player’s ball (stray unclaimed ball on the mat while the real ball is still at the cup). Auto-snap then
+    // reassigns the username to the wrong track (e.g. pillarman38). Only allow reclaim when a single ball exists.
+    size_t n_valid_balls = 0;
+    for (const auto& b : balls) {
+        if (b.valid) {
+            ++n_valid_balls;
+        }
+    }
+    if (n_valid_balls > 1) {
+        // #region agent log (debug a3d342)
+        {
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            std::ofstream dbg("../../debug-a3d342.log", std::ios::app);
+            if (dbg.is_open()) {
+                dbg << "{\"sessionId\":\"a3d342\",\"hypothesisId\":\"H_RECLAIM_SKIP\",\"location\":\"StatsApi::try_reassign_placement_return_near_hint\",\"message\":\"multi_ball_no_auto_snap\",\"data\":{\"n_valid_balls\":" << n_valid_balls << "},\"timestamp\":" << ms << "}\n";
+            }
+        }
+        // #endregion agent log (debug a3d342)
+        return;
+    }
 
     auto visible_claim_on = [&](int sid) -> bool {
         for (const auto& u : users_) {
@@ -510,35 +574,65 @@ void StatsApi::try_reassign_placement_return_near_hint(const std::vector<Tracked
     }
     if (cands.empty()) return;
 
-    struct Pair {
-        float d2;
-        size_t wi;
-        size_t ci;
-    };
-    std::vector<Pair> pairs;
-    for (size_t wi = 0; wi < wants.size(); ++wi) {
-        const auto& w = wants[wi];
-        for (size_t ci = 0; ci < cands.size(); ++ci) {
-            const auto& b = balls[cands[ci].ball_i];
-            float dx = b.x - w.px;
-            float dy = b.y - w.py;
-            float d2 = dx * dx + dy * dy;
-            if (d2 <= max_d2) pairs.push_back({d2, wi, ci});
-        }
-    }
-    std::sort(pairs.begin(), pairs.end(), [](const Pair& a, const Pair& b) { return a.d2 < b.d2; });
+    std::vector<bool> cand_used(cands.size(), false);
 
-    std::vector<bool> used_w(wants.size(), false);
-    std::vector<bool> used_c(cands.size(), false);
-    for (const auto& p : pairs) {
-        if (used_w[p.wi] || used_c[p.ci]) continue;
-        used_w[p.wi] = true;
-        used_c[p.ci] = true;
-        const size_t user_i = wants[p.wi].user_i;
+    for (const auto& w : wants) {
+        struct Scored {
+            float d2;
+            size_t ci;
+        };
+        std::vector<Scored> in_range;
+        for (size_t ci = 0; ci < cands.size(); ++ci) {
+            if (cand_used[ci]) continue;
+            const auto& b = balls[cands[ci].ball_i];
+            const float dx = b.x - w.px;
+            const float dy = b.y - w.py;
+            const float d2 = dx * dx + dy * dy;
+            if (d2 <= max_d2) {
+                in_range.push_back({d2, ci});
+            }
+        }
+        if (in_range.empty()) continue;
+        std::sort(in_range.begin(), in_range.end(),
+                  [](const Scored& a, const Scored& b) { return a.d2 < b.d2; });
+
+        const float r1 = std::sqrt(in_range[0].d2);
+        if (in_range.size() >= 2) {
+            const float r2 = std::sqrt(in_range[1].d2);
+            if (r2 - r1 < min_gap) {
+                // #region agent log (debug a3d342)
+                {
+                    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
+                    std::ofstream dbg("../../debug-a3d342.log", std::ios::app);
+                    if (dbg.is_open()) {
+                        dbg << "{\"sessionId\":\"a3d342\",\"hypothesisId\":\"H_RECLAIM_SKIP\",\"location\":\"StatsApi::try_reassign_placement_return_near_hint\",\"message\":\"ambiguous_reclaim\",\"data\":{\"r1\":" << r1 << ",\"r2\":" << r2 << ",\"min_gap\":" << min_gap << "},\"timestamp\":" << ms << "}\n";
+                    }
+                }
+                // #endregion agent log (debug a3d342)
+                continue;
+            }
+        }
+
+        const size_t best_ci = in_range[0].ci;
+        const int new_sid = cands[best_ci].stable_id;
+        const size_t user_i = w.user_i;
         const int old_bi = users_[user_i].ball_index;
-        const int new_sid = cands[p.ci].stable_id;
         if (old_bi == new_sid) continue;
+
         users_[user_i].ball_index = new_sid;
+        cand_used[best_ci] = true;
+
+        // #region agent log (debug a3d342)
+        {
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            std::ofstream dbg("../../debug-a3d342.log", std::ios::app);
+            if (dbg.is_open()) {
+                dbg << "{\"sessionId\":\"a3d342\",\"hypothesisId\":\"H_RECLAIM\",\"location\":\"StatsApi::try_reassign_placement_return_near_hint\",\"message\":\"ball_index_reassigned\",\"data\":{\"old_bi\":" << old_bi << ",\"new_sid\":" << new_sid << ",\"d2\":" << in_range[0].d2 << ",\"max_dist_px\":" << max_dist_px << "},\"timestamp\":" << ms << "}\n";
+            }
+        }
+        // #endregion agent log (debug a3d342)
     }
 }
 
@@ -553,11 +647,14 @@ void StatsApi::finalize_placement_hints(float green_center_x, float green_center
         u.placement_after_putt = false;
     }
 
+    // Show "return ball here" at putt start as soon as the make is registered — not only after the track goes
+    // invisible. While the ball is still visible in the cup, ball_track_visible is true; gating on !visible
+    // meant line_idxs stayed empty and no PlaceBallMarker / Contour hint ever appeared.
     std::vector<size_t> line_idxs;
     for (size_t i = 0; i < users_.size(); ++i) {
         const UserState& u = users_[i];
         if (u.username.empty() || u.ball_index < 0) continue;
-        if (u.placement_return_after_putt && !u.ball_track_visible) {
+        if (u.placement_return_after_putt) {
             line_idxs.push_back(i);
         }
     }
@@ -570,8 +667,14 @@ void StatsApi::finalize_placement_hints(float green_center_x, float green_center
         for (int k = 0; k < n_line; ++k) {
             UserState& u = users_[line_idxs[static_cast<size_t>(k)]];
             const float offset = (static_cast<float>(k) - mid) * line_spacing_px;
-            u.placement_pixel_x = green_center_x + offset;
-            u.placement_pixel_y = green_center_y;
+            // After a make, anchor the return marker at putt start — not green/hole centroid (often near cup).
+            if (u.placement_putt_start_valid) {
+                u.placement_pixel_x = u.placement_putt_start_x + offset;
+                u.placement_pixel_y = u.placement_putt_start_y;
+            } else {
+                u.placement_pixel_x = green_center_x + offset;
+                u.placement_pixel_y = green_center_y;
+            }
             u.placement_hint_valid = true;
             u.placement_waiting = true;
             u.placement_after_putt = true;
@@ -591,6 +694,17 @@ void StatsApi::finalize_placement_hints(float green_center_x, float green_center
         u.placement_after_putt = false;
     }
 
+    // #region agent log (debug a3d342)
+    {
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        std::ofstream dbg("../../debug-a3d342.log", std::ios::app);
+        if (dbg.is_open() && !line_idxs.empty()) {
+            const UserState& u0 = users_[line_idxs[0]];
+            dbg << "{\"sessionId\":\"a3d342\",\"hypothesisId\":\"H_PLACE\",\"location\":\"StatsApi::finalize_placement_hints\",\"message\":\"after_putt_anchor\",\"data\":{\"n_line\":" << n_line << ",\"anchor\":\"" << (u0.placement_putt_start_valid ? "putt_start" : "green_center") << "\",\"px\":" << u0.placement_pixel_x << ",\"py\":" << u0.placement_pixel_y << ",\"green_cx\":" << green_center_x << ",\"green_cy\":" << green_center_y << "},\"timestamp\":" << ms << "}\n";
+        }
+    }
+    // #endregion agent log (debug a3d342)
 }
 
 }  // namespace golf

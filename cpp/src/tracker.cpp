@@ -376,6 +376,7 @@ void Tracker::update(const std::vector<Detection>& detections, double dt) {
         if (distance_ok) {
             if (speed_ok) {
                 this->is_putt_made = true;
+                this->putt_made_ball_stable_id = primary_ball.stable_id;
                 printf("RESULT: MADE IT (Closest approach was %.2f in)\n", best_dist_inches);
             }
         }

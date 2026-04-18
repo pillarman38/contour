@@ -55,7 +55,12 @@ public:
     void update(const std::vector<Detection>& detections, double dt_seconds);
 
     bool is_putt_made = false;
-    void reset_putt() { is_putt_made = false; }
+    /** Set with \c is_putt_made: stable_id of the ball track that was lost at the hole (for StatsApi / claims). */
+    int putt_made_ball_stable_id = -1;
+    void reset_putt() {
+        is_putt_made = false;
+        putt_made_ball_stable_id = -1;
+    }
 
     /// Call when a new putt starts (ball in motion) so "Putt ended" can fire again next time ball is lost.
     void reset_for_new_putt() { putt_ended_fired_ = false; }

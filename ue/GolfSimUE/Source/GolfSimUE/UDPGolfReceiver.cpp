@@ -16,48 +16,8 @@
 #include "Components/TextRenderComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Containers/Set.h"
-#include "HAL/PlatformFileManager.h"
-#include "Misc/Paths.h"
-#include "Containers/StringConv.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogGolfUDP, Log, All);
-
-// #region agent log (debug a3d342)
-static void AgentDebugBallPoolLog(
-	int32 PoolNeedBalls,
-	int32 BallsDataNum,
-	int32 VisibleBalls,
-	int32 NumExtraBallActors,
-	int32 MaxExtraAllowed,
-	int32 TrimmedCount)
-{
-	static double LastT = 0.;
-	const double Now = FPlatformTime::Seconds();
-	if (Now - LastT < 0.4)
-	{
-		return;
-	}
-	LastT = Now;
-	const FString Path = FPaths::ConvertRelativePathToFull(
-		FPaths::Combine(FPaths::ProjectDir(), TEXT("../../debug-a3d342.log")));
-	const FString Line = FString::Printf(
-		TEXT("{\"sessionId\":\"a3d342\",\"hypothesisId\":\"H1_H2\",\"location\":\"UDPGolfReceiver::Tick\",\"message\":\"ball_actor_pool\",\"data\":{\"poolNeedBalls\":%d,\"ballsDataNum\":%d,\"visibleBalls\":%d,\"extraBallActors\":%d,\"maxExtraAllowed\":%d,\"trimmed\":%d},\"timestamp\":%lld}\n"),
-		PoolNeedBalls,
-		BallsDataNum,
-		VisibleBalls,
-		NumExtraBallActors,
-		MaxExtraAllowed,
-		TrimmedCount,
-		(int64)(FDateTime::UtcNow().GetTicks() / ETimespan::TicksPerMillisecond));
-	IPlatformFile& PF = FPlatformFileManager::Get().GetPlatformFile();
-	if (IFileHandle* Handle = PF.OpenWrite(*Path, true))
-	{
-		FTCHARToUTF8 Utf8(*Line);
-		Handle->Write(reinterpret_cast<const uint8*>(Utf8.Get()), static_cast<int32>(Utf8.Length()));
-		delete Handle;
-	}
-}
-// #endregion agent log
 
 /** Blueprint meshes are often Static; UDP-driven actors must be Movable or transforms do not apply correctly. */
 static void EnsureUdpDrivenActorMovable(AActor* A)
@@ -1020,7 +980,6 @@ void AUDPGolfReceiver::Tick(float DeltaTime)
 			NeedBalls = VisibleBalls;
 		}
 		const int32 MaxExtraBallActors = FMath::Max(0, NeedBalls - 1);
-		int32 TrimmedBallActors = 0;
 		if (IsValidActorRef(BallActor))
 		{
 			UWorld* World = GetWorld();
@@ -1046,14 +1005,10 @@ void AUDPGolfReceiver::Tick(float DeltaTime)
 				while (BallActors.Num() > MaxExtraBallActors)
 				{
 					AActor* ToDestroy = BallActors.Pop();
-					++TrimmedBallActors;
 					if (IsValid(ToDestroy)) ToDestroy->Destroy();
 				}
 			}
 		}
-		// #region agent log
-		AgentDebugBallPoolLog(NeedBalls, BallsDataNum, VisibleBalls, BallActors.Num(), MaxExtraBallActors, TrimmedBallActors);
-		// #endregion agent log
 
 		// Latch each visual slot to a tracker stable_id (balls[] are sorted by x,y; order swaps when balls cross).
 		const int32 ExpectedSlots = (IsValidActorRef(BallActor) ? 1 : 0) + BallActors.Num();
@@ -1076,13 +1031,15 @@ void AUDPGolfReceiver::Tick(float DeltaTime)
 		{
 			SlotToBallsDataRow.Init(INDEX_NONE, ExpectedSlots);
 			TSet<int32> ClaimedRows;
+			// Bind by stable_id even when the track is not visible (brief occlusion / motion blur during putts).
+			// Requiring bVisible here forced nearest-visible fallback and stole another ball's row → wrong username on mesh.
 			for (int32 Slot = 0; Slot < ExpectedSlots; ++Slot)
 			{
 				if (!BallActorLatchedStableIds.IsValidIndex(Slot)) continue;
 				const int32 Sid = BallActorLatchedStableIds[Slot];
 				if (Sid < 0) continue;
 				const int32 Di = FindRowByStableIdOnly(BallsData, Sid);
-				if (Di != INDEX_NONE && BallsData[Di].Tracked.bVisible && !ClaimedRows.Contains(Di))
+				if (Di != INDEX_NONE && !ClaimedRows.Contains(Di))
 				{
 					SlotToBallsDataRow[Slot] = Di;
 					ClaimedRows.Add(Di);

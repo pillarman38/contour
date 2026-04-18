@@ -192,7 +192,10 @@ int main(int argc, char** argv) {
         // When the putt is first detected as made, snapshot the current stats so the
         // payload that carries putt_made=true also carries this putt's numbers.
         if (tracker.is_putt_made && putt_made_frames == 0) {
-            api.notify_putt_made_for_stable_id(tracker.ball().stable_id);
+            const golf::PuttData ps_snap = putt_stats.current();
+            const int made_sid =
+                (tracker.putt_made_ball_stable_id >= 0) ? tracker.putt_made_ball_stable_id : tracker.ball().stable_id;
+            api.notify_putt_made_for_stable_id(made_sid, ps_snap.start_x, ps_snap.start_y);
             putt_made_frames = putt_made_hold;
             last_completed_stats = putt_stats.current();
             last_completed_stats.state = golf::PuttState::STOPPED;
@@ -220,7 +223,7 @@ int main(int argc, char** argv) {
             stats_to_send = current;  // Full stats so Unreal displays launch/peak/stop markers.
         }
 
-        // Placement hints: after made putt → green-centre line; occlusion only → last known (sync tracks visibility).
+        // Placement hints: after made putt → putt start (see StatsApi); occlusion → last known when not in made-putt flow.
         float green_cx = static_cast<float>(orig_w) * 0.5f;
         float green_cy = static_cast<float>(orig_h) * 0.5f;
         {
@@ -241,7 +244,7 @@ int main(int argc, char** argv) {
         api.sync_ball_placements_from_tracker(tracker.balls());
         api.finalize_placement_hints(green_cx, green_cy, 90.f);
         // Made-putt ghost is often far from green-center hint; new detection gets a new stable_id — snap claim to it.
-        api.try_reassign_placement_return_near_hint(tracker.balls(), 320.f);
+        api.try_reassign_placement_return_near_hint(tracker.balls(), golf::kPlacementReturnReassignMaxDistPx);
         api.sync_ball_placements_from_tracker(tracker.balls());
         api.finalize_placement_hints(green_cx, green_cy, 90.f);
 

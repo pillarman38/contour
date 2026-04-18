@@ -40,8 +40,12 @@ struct UserState {
     float last_known_pixel_x = 0.f;
     float last_known_pixel_y = 0.f;
     bool last_known_valid = false;
-    /** Set when this stable_id had a confirmed made putt; until ball is seen again, use green-center line. */
+    /** Set when this stable_id had a confirmed made putt; until ball is seen again, show return marker. */
     bool placement_return_after_putt = false;
+    /** Pixel position where the made putt started (from PuttStats); drives placement after putt vs hole centroid. */
+    float placement_putt_start_x = 0.f;
+    float placement_putt_start_y = 0.f;
+    bool placement_putt_start_valid = false;
     /** API output: where to show marker (center-line slot or last_known). */
     float placement_pixel_x = 0.f;
     float placement_pixel_y = 0.f;
@@ -88,6 +92,11 @@ struct TrackingSnapshot {
 
     std::vector<UserState> users;
 };
+
+/** Snap claim to a visible track within this distance (px) of the return hint. Too large → wrong ball steals claim; too small → new track never snaps ("Claim this ball"). */
+inline constexpr float kPlacementReturnReassignMaxDistPx = 200.f;
+/** If two balls are both in range of the hint, require (dist2 - dist1) >= this (px) to snap; else skip (avoids stealing an unclaimed ball near the mat). */
+inline constexpr float kPlacementReclaimUnambiguousGapPx = 48.f;
 
 /// Shared state for tracking snapshot (main writes, StatsApi reads).
 struct TrackingState {
@@ -140,10 +149,12 @@ public:
 
     /// If the claimed ghost has no valid detection (pickup / occlusion / made-putt line) but a valid ball appears
     /// near the hint pixel, snap \ref UserState::ball_index to that track so placement clears when the ball is back.
+    /// When two or more ball tracks are visible, auto-snap is skipped so a stray ball does not steal the claim.
     void try_reassign_placement_return_near_hint(const std::vector<TrackedObject>& balls, float max_dist_px);
 
     /// Call once when \ref Tracker::is_putt_made is first true (made putt) for this stable_id.
-    void notify_putt_made_for_stable_id(int stable_id);
+    /// @param start_x,start_y  Ball pixel position at putt start (camera space); placement marker uses these after a make.
+    void notify_putt_made_for_stable_id(int stable_id, float start_x, float start_y);
 
 private:
     PuttStats& stats_;
